@@ -92,7 +92,7 @@ RC="$(_rc_file)"
 
 # --- port self-adaptation -----------------------------------------------------
 _pick_port() {  # echo first free port at/above $1 (scans up to +100)
-  python3 - "${1:-$DEFAULT_PORT}" <<'PY'
+  "$PYTHON" - "${1:-$DEFAULT_PORT}" <<'PY'
 import socket, sys
 start = int(sys.argv[1] or 8788)
 for p in range(start, start + 100):
