@@ -1,0 +1,79 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "cost-xray"
+version = "0.1.0"
+description = "Decompose what's actually in your coding agent's context window."
+readme = "README.md"
+requires-python = ">=3.10"
+license = { file = "LICENSE" }
+authors = [{ name = "Ryan Li", email = "ryan@tigerless.com" }]
+keywords = [
+    "claude-code", "codex", "llm", "tokens", "cost", "mitmproxy",
+    "context-window", "observability", "tokenizer",
+]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Environment :: Console",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: MacOS",
+    "Operating System :: POSIX :: Linux",
+    "Programming Language :: Python :: 3 :: Only",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Software Development :: Debuggers",
+    "Topic :: Utilities",
+]
+dependencies = [
+    "mitmproxy>=10",
+    "tiktoken>=0.7",
+    "rich>=13",
+]
+
+[project.urls]
+Homepage = "https://github.com/tigerless-labs/cost-xray"
+Repository = "https://github.com/tigerless-labs/cost-xray"
+Issues = "https://github.com/tigerless-labs/cost-xray/issues"
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7",
+    "ruff>=0.4",
+]
+# Accurate, auto-updated model pricing. Optional: cost.rates() falls back to a small
+# hardcoded table when LiteLLM is absent, so the suite runs without it.
+pricing = [
+    "litellm>=1.40",
+]
+# Interactive TUI (mouse + keyboard, drill-down). The rich.Live `tui` module is the
+# headless fallback; `tui_app` (Textual) needs this.
+tui = [
+    "textual>=0.50",
+]
+
+[tool.setuptools]
+packages = ["cost_xray"]
+
+[tool.pytest.ini_options]
+# Run `import cost_xray...` against the repo checkout without an install step.
+pythonpath = ["."]
+testpaths = ["tests"]
+addopts = "-q"
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+
+[tool.ruff.lint]
+# pyflakes (F), pycodestyle (E/W), isort (I), bugbear (B), pyupgrade (UP).
+select = ["E", "F", "W", "I", "B", "UP"]
+# Bare-ish excepts are intentional in the proxy hot path (must never crash the agent).
+ignore = ["E501", "B904"]
+
+[tool.ruff.lint.per-file-ignores]
+# Tests build deliberately partial fake objects and use assert-heavy style.
+"tests/*" = ["B011"]

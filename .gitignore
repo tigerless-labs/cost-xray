@@ -1,0 +1,15 @@
+__pycache__/
+*.pyc
+.venv/
+*.egg-info/
+.cost-xray/
+experiments/reports/
+*.log
+.coverage
+CLAUDE.md
+
+# private docs — design rationale + local notes (for maintainers/agent, not OSS users)
+doc/
+
+# throwaway, local-only one-shot tools
+scratch/

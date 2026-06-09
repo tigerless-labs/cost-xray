@@ -1,0 +1,3 @@
+mitmproxy>=10
+tiktoken>=0.7
+rich>=13

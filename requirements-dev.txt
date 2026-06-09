@@ -1,0 +1,5 @@
+# Dev/test dependencies. Includes the runtime deps so a fresh checkout can both
+# run the app and the test suite from one install.
+-r requirements.txt
+pytest>=7
+ruff>=0.4
