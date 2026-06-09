@@ -402,7 +402,7 @@ _inject_shell() {  # $1 include claude?  $2 include codex?  (1/0)
   local inc_claude="${1:-0}" inc_codex="${2:-0}"
   touch "$RC"
   if grep -qF "$MARK_BEGIN" "$RC" 2>/dev/null; then
-    sed -i "/$MARK_BEGIN/,/$MARK_END/d" "$RC"
+    sed "/$MARK_BEGIN/,/$MARK_END/d" "$RC" > "$RC.cx.tmp" && mv "$RC.cx.tmp" "$RC"   # portable (BSD+GNU)
   fi
   printf '\n%s\n' "$MARK_BEGIN" >> "$RC"
   # shared helpers + cx (always). cx reads the repo dir from ~/.cost-xray/repo so it stays
@@ -479,7 +479,7 @@ CODEXBLOCK
 _remove_shell() {
   [ -f "$RC" ] || return 0
   if grep -qF "$MARK_BEGIN" "$RC"; then
-    sed -i "/$MARK_BEGIN/,/$MARK_END/d" "$RC"
+    sed "/$MARK_BEGIN/,/$MARK_END/d" "$RC" > "$RC.cx.tmp" && mv "$RC.cx.tmp" "$RC"   # portable (BSD+GNU)
     echo "removed cost-xray block from $RC"
   fi
 }

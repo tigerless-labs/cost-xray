@@ -94,6 +94,18 @@ def test_macos_install_writes_launchagent_and_wrapper(tmp_path):
     assert not (home / ".config" / "systemd").exists()          # no systemd unit on macOS
 
 
+def test_macos_reinstall_is_idempotent(tmp_path):
+    # Reinstall must strip the old wrapper block before re-writing it — exactly one block, never a
+    # duplicate or (the macOS bug) a `sed -i` failure that aborts install before the wrapper is written.
+    r1, home, _ = _macos_run(tmp_path, "install", shell="/bin/zsh")
+    assert r1.returncode == 0, r1.stderr
+    r2, home, _ = _macos_run(tmp_path, "install", shell="/bin/zsh")
+    assert r2.returncode == 0, r2.stderr
+    rc = (home / ".zshrc").read_text()
+    assert rc.count("# >>> cost-xray >>>") == 1 and "claude()" in rc
+    assert not (home / ".zshrc.cx.tmp").exists()        # temp file cleaned up
+
+
 def test_macos_bash_wrapper_goes_to_bash_profile(tmp_path):
     # macOS login bash reads ~/.bash_profile, not ~/.bashrc — wrappers must land where they're sourced.
     res, home, _ = _macos_run(tmp_path, "install", shell="/bin/bash")
