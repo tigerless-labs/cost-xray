@@ -34,10 +34,11 @@ header (same UUID as ~/.claude/projects/.../<uuid>.jsonl), with fallbacks.
 from __future__ import annotations
 
 import json
-import multiprocessing
 import os
 import pathlib
 import queue
+import subprocess
+import sys
 import threading
 
 try:                                  # package context (tests / `-m`)
@@ -194,47 +195,50 @@ def _enqueue(job) -> None:
     _WRITE_Q.put(job)
 
 
-_CONSUMER_CONN = None
 _CONSUMER_LOCK = threading.Lock()
 
 
-def _ensure_consumer():
-    """Lazily start the **one warm materializer consumer** (a separate process — invariant #1) and
-    return our end of its signal pipe. Started via the `spawn` context (a fresh interpreter, never a
-    fork of this multithreaded proxy), so it imports the tokenizer **once** and stays warm. It is a
-    daemon child bound to this proxy: when the proxy dies, the pipe reaches EOF and the consumer exits.
-    Restarted transparently if it ever died."""
-    global _CONSUMER_CONN
-    with _CONSUMER_LOCK:
-        proc = getattr(_ensure_consumer, "_proc", None)
-        if _CONSUMER_CONN is not None and proc is not None and proc.is_alive():
-            return _CONSUMER_CONN
-        ctx = multiprocessing.get_context("spawn")
-        parent_conn, child_conn = ctx.Pipe()
-        proc = ctx.Process(target=_consume_entry, args=(child_conn,),
-                           name="cost-xray-materializer", daemon=True)
-        proc.start()
-        child_conn.close()                               # the child holds its own copy
-        _ensure_consumer._proc = proc
-        _CONSUMER_CONN = parent_conn
-        return _CONSUMER_CONN
+class _Materializer:
+    """Handle to the **one warm materializer** — a plain child process (`python -m
+    cost_xray.materialize_daemon --watch`), **never** a `multiprocessing` spawn: spawn re-imports the
+    proxy's mitmdump main module in the child and wedges it, so it silently never materializes. The
+    child imports the tokenizer **once** and stays warm; it blocks on its stdin for a wake byte and
+    exits at EOF when this proxy dies, so its lifetime is bound to capture. `send` wakes it for one
+    sweep; a dead child is relaunched on the next `send` (self-healing). The proxy never tokenizes
+    (invariant #1) — it only writes a byte."""
+
+    def __init__(self) -> None:
+        self._proc = None
+
+    def _launch(self):
+        repo = pathlib.Path(__file__).resolve().parent.parent
+        env = dict(os.environ)
+        env["PYTHONPATH"] = os.pathsep.join(p for p in (str(repo), env.get("PYTHONPATH", "")) if p)
+        log = (OUT / "materializer.log").open("a")
+        return subprocess.Popen(
+            [sys.executable, "-m", "cost_xray.materialize_daemon", "--watch"],
+            stdin=subprocess.PIPE, stdout=log, stderr=log, cwd=str(repo), env=env)
+
+    def send(self, _=1) -> None:
+        with _CONSUMER_LOCK:
+            if self._proc is None or self._proc.poll() is not None:
+                self._proc = self._launch()
+            self._proc.stdin.write(b"\n")
+            self._proc.stdin.flush()
 
 
-def _consume_entry(conn) -> None:
-    """Child entrypoint: run the warm sweep loop. `consume` is imported **here, in the child**, so the
-    proxy process never pulls in the tokenizer (invariant #1). The dual import mirrors this module's
-    top — package context (tests / `-m`) vs mitmproxy loading by path (cost_xray/ on sys.path)."""
-    try:
-        from cost_xray.materialize_daemon import consume
-    except ImportError:
-        from materialize_daemon import consume
-    consume(conn)
+_MATERIALIZER = _Materializer()
+
+
+def _ensure_consumer() -> _Materializer:
+    """The process-wide warm materializer handle (its child is launched lazily on the first signal)."""
+    return _MATERIALIZER
 
 
 def _signal_materialize() -> None:
-    """Wake the warm consumer for one sweep — a cheap `send` on the pipe (the proxy never tokenizes).
-    Fail-open: if signalling fails, capture is unaffected and the next turn (or the TUI's freshness
-    kick) re-materializes."""
+    """Wake the warm materializer for one sweep — a cheap byte on its stdin (the proxy never
+    tokenizes). Fail-open: if signalling fails, capture is unaffected and the next turn (or the TUI's
+    freshness kick) re-materializes."""
     try:
         _ensure_consumer().send(1)
     except Exception:

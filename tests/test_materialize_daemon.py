@@ -6,7 +6,7 @@ from __future__ import annotations
 
 import fcntl
 import json
-import multiprocessing as mp
+import os
 
 from cost_xray import materialize_daemon as daemon
 from cost_xray.materialize import materialize_session
@@ -76,12 +76,13 @@ def test_main_runs_one_sweep_and_exits(tmp_path):
     assert not hasattr(daemon, "run")                  # the polling loop is gone
 
 
-def test_consume_sweeps_on_signal_then_exits_on_eof(tmp_path):
-    # the warm consumer: block for a turn signal, sweep every stale session, repeat; exit at EOF
-    # (the proxy died). No polling — it does nothing until signalled.
+def test_watch_sweeps_on_signal_then_exits_on_eof(tmp_path):
+    # the warm watcher: block for a turn's wake byte on its input, sweep every stale session, repeat;
+    # exit at EOF (the proxy closed the pipe). No polling — it does nothing until signalled.
     d = _write_session(tmp_path / "claude" / "s1")
-    parent, child = mp.Pipe()
-    parent.send(1)                                      # one turn signalled
-    parent.close()                                      # then close → consume sweeps once, hits EOF, returns
-    daemon.consume(child, root=tmp_path)                # runs in-thread; returns (does not block forever)
+    r, w = os.pipe()
+    os.write(w, b"\n")                                  # one turn signalled
+    os.close(w)                                         # then close → watch sweeps once, hits EOF, returns
+    with os.fdopen(r, "rb", buffering=0) as reader:
+        daemon.watch(reader, root=tmp_path)             # runs in-thread; returns (does not block forever)
     assert (d / "summary.json").exists()                # the signalled turn was materialized

@@ -1,21 +1,23 @@
 """Materializer — turns captured raw into derived/summary for every stale session.
 
-Runs as a **warm long-lived consumer** the capture proxy starts once and signals per turn (`consume`),
+Runs as a **warm long-lived consumer** the capture proxy starts once and signals per turn (`watch`),
 never in the proxy itself (invariant #1) and never gated on the TUI. The consumer **blocks** on the
 signal channel, so an idle store costs nothing; it pays the tokenizer import **once** (not per turn);
 it coalesces a burst of signals into one sweep; and it exits at EOF when the proxy dies. Discovery is
 by disk walk, so a never-opened session is still materialized, and a turn in any session catches up
 sessions missed during downtime. See docs/design/read-layer.md, ops.md.
 
-`sweep_once` is one pass (materialize every stale session). `consume` is the warm loop. `main` is a
-one-shot CLI for a manual sweep. Per-session locking lives in `materialize_session`, so concurrent
-sweeps are safe.
+`sweep_once` is one pass (materialize every stale session). `watch` is the warm loop (wake bytes on
+stdin). `main` is the CLI: a one-shot sweep, or `--watch` to run the warm loop. Per-session locking
+lives in `materialize_session`, so concurrent sweeps are safe.
 """
 from __future__ import annotations
 
 import argparse
 import os
 import pathlib
+import select
+import sys
 
 from cost_xray.materialize import materialize_session
 
@@ -53,29 +55,33 @@ def sweep_once(root=ROOT):
     return done
 
 
-def consume(conn, root=ROOT):
-    """Warm loop: block for a turn signal, coalesce any burst, sweep every stale session, repeat.
-    Exits when the signal channel reaches EOF — i.e. the proxy that owns the other end has died — so
-    the consumer's lifetime is bound to capture. `sweep_once` is fail-open, so a bad session never
-    breaks the loop."""
+def watch(reader=None, root=ROOT):
+    """Warm loop: block on the wake channel (the proxy's pipe to our stdin) for one byte, coalesce
+    any bytes already waiting into a single sweep of every stale session, repeat. Returns at EOF —
+    the proxy that owns the write end has closed it — so the watcher's lifetime is bound to capture.
+    `sweep_once` is fail-open, so a bad session never breaks the loop."""
+    f = reader if reader is not None else sys.stdin.buffer
+    fd = f.fileno()
     while True:
-        try:
-            conn.recv()
-        except EOFError:
+        if not os.read(fd, 4096):             # blocks until ≥1 byte or EOF (b"")
             return
-        try:
-            while conn.poll():                # drain pending signals → one sweep per burst
-                conn.recv()
-        except (EOFError, OSError):
-            pass
+        while select.select([fd], [], [], 0)[0]:   # drain a burst → one sweep
+            if not os.read(fd, 4096):
+                sweep_once(root)
+                return
         sweep_once(root)
 
 
 def main(argv=None):
-    ap = argparse.ArgumentParser(description="cost-xray one-shot materialize sweep")
+    ap = argparse.ArgumentParser(description="cost-xray materialize: one-shot sweep, or --watch warm loop")
     ap.add_argument("--root", default=str(ROOT))
+    ap.add_argument("--watch", action="store_true",
+                    help="warm loop: sweep on each wake byte read from stdin; exit at EOF")
     args = ap.parse_args(argv)
-    sweep_once(pathlib.Path(args.root))
+    if args.watch:
+        watch(root=pathlib.Path(args.root))
+    else:
+        sweep_once(pathlib.Path(args.root))
 
 
 if __name__ == "__main__":
