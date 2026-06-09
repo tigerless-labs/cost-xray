@@ -1,8 +1,8 @@
 # Install — full reference
 
 The [README](../README.md#install) has the one-line install and basic use. This is the deep
-reference: what `install` writes to disk, systemd specifics, GUI agents, manual mode, and
-troubleshooting.
+reference: what `install` writes to disk, the supervisor specifics (systemd on Linux, launchd on
+macOS), GUI agents, manual mode, and troubleshooting.
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/tigerless-labs/cost-xray/master/install.sh | bash
@@ -16,18 +16,21 @@ selecting it is your consent. Already cloned? Run `./install.sh` (or `./run.sh i
 
 | Thing | Where |
 | --- | --- |
-| systemd user services | `~/.config/systemd/user/cost-xray.service` (Claude, reverse) and `cost-xray-codex.service` (Codex, forward) |
-| linger | `loginctl enable-linger $USER` — start at boot before you log in |
+| supervised services (Linux) | `~/.config/systemd/user/cost-xray.service` (Claude, reverse) and `cost-xray-codex.service` (Codex, forward) |
+| supervised services (macOS) | `~/Library/LaunchAgents/ai.tigerless.cost-xray.plist` and `…-codex.plist` (`RunAtLoad` + `KeepAlive` = boot-start + auto-restart) |
+| linger (Linux only) | `loginctl enable-linger $USER` — start at boot before you log in (launchd agents start at login automatically) |
 | config | `~/.cost-xray/env` (`UPSTREAM` / `MITMDUMP` / `PORT` / `CODEX_PORT`) |
 | live ports | `~/.cost-xray/port` (:8788), `~/.cost-xray/codex-port` (:8789) |
 | codex CA bundle | `~/.cost-xray/codex-ca-bundle.pem` (system roots + local mitm CA) |
-| shell wrappers | `claude()`/`codex()` + `cx` in `~/.bashrc` — scoped, not a global proxy |
+| shell wrappers | `claude()`/`codex()` + `cx` in your shell rc (`~/.bashrc` on Linux; `~/.zshrc` or `~/.bash_profile` on macOS, per `$SHELL`) — scoped, not a global proxy |
 | pause marker | `~/.cost-xray/paused` — present after `cx stop`; wrappers then run agents direct |
 
-The wrappers are **self-healing**: each run probes the proxy and restarts it if it's down, so
-capture survives crashes and reboots. `claude` needs **no CA** (reverse-proxy mode re-encrypts to
-the real API); `codex` routes through the forward proxy with the scoped CA. Each wrapper affects
-only its own command — your `curl` / `git` / `pip` and the OS trust store are untouched.
+Both supervisors do the same job (boot/login-start + auto-restart); the install picks the one your
+OS has, falling back to [manual mode](#manual-mode-no-supervisor) if neither. The wrappers are
+**self-healing**: each run probes the proxy and restarts it if it's down, so capture survives
+crashes and reboots. `claude` needs **no CA** (reverse-proxy mode re-encrypts to the real API);
+`codex` routes through the forward proxy with the scoped CA. Each wrapper affects only its own
+command — your `curl` / `git` / `pip` and the OS trust store are untouched.
 
 ## Manage (from any directory)
 
@@ -45,8 +48,9 @@ removes the rest.
 
 ## Why it survives reboots & port clashes
 
-- **Reboot** → the systemd user service + linger bring it back (plain `nohup` would not).
-- **Crash** → `Restart=always` (3s backoff).
+- **Reboot** → the supervisor brings it back: the systemd user service + linger (Linux), or the
+  launchd agent's `RunAtLoad` at login (macOS). Plain `nohup` would not.
+- **Crash** → systemd `Restart=always` (3s backoff) / launchd `KeepAlive`.
 - **Port taken** → the proxy scans up to the next free port, writes it to `~/.cost-xray/port`, and
   the wrapper reads that file on every launch — so the client always finds it.
 
@@ -66,18 +70,22 @@ Cursor and other base-url agents use the reverse proxy (:8788); Codex hard-locks
 
 ```bash
 cx status
-#   reverse(claude): active (systemd)   :8788 -> https://api.anthropic.com
+#   reverse(claude): active (systemd)   :8788 -> https://api.anthropic.com   # "(launchd)" on macOS
 #   forward(codex):  active (systemd)   :8789 -> chatgpt.com
 # sessions captured: N
 
+# Linux:
 systemctl --user status cost-xray.service cost-xray-codex.service
 journalctl --user -u cost-xray-codex.service -n 20
+# macOS:
+launchctl print "gui/$(id -u)/ai.tigerless.cost-xray"
 ```
 
-## Manual mode (no systemd)
+## Manual mode (no supervisor)
 
-If `systemd --user` isn't available (some containers, WSL), skip `install` and run it detached. It
-still self-adapts the port but **won't survive a reboot** — re-run `start` after each boot.
+If neither `systemd --user` (Linux) nor `launchd` (macOS) is available — some containers, WSL —
+`install` falls back here automatically; you can also run it detached yourself. It still self-adapts
+the port but **won't survive a reboot** — re-run `start` after each boot.
 
 ```bash
 ./run.sh start     # nohup background proxy
@@ -100,5 +108,7 @@ Captured data under `~/.cost-xray/` is **kept** — `rm -rf ~/.cost-xray` to cle
 
 - **`mitmdump not found`** — the venv wasn't built; re-run `./install.sh` (it provisions the venv, fetching a Python via uv when the system one is missing or too old).
 - **linger needs root** — on some distros: `sudo loginctl enable-linger $USER` (once).
-- **zsh** — wrappers are written to `~/.bashrc`; copy the `# >>> cost-xray >>>` block into `~/.zshrc`.
+- **shell rc** — wrappers go to the rc for your `$SHELL`: `~/.bashrc` (Linux bash), `~/.zshrc`
+  (zsh), `~/.bash_profile` (macOS bash). Using a different shell? Copy the `# >>> cost-xray >>>`
+  block into its rc.
 - **change port / upstream** — edit `~/.cost-xray/env` (`PORT` / `CODEX_PORT` / `UPSTREAM`), then `cx restart`.

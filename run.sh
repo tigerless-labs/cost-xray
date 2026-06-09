@@ -56,10 +56,41 @@ MAT_UNIT="${HOME}/.config/systemd/user/cost-xray-materializer.service"
 MAT_SERVICE="cost-xray-materializer.service"
 PAUSEFILE="${STATE}/paused"   # present = user ran `stop`; wrappers run agents DIRECT (no auto-restart)
 REPOFILE="${STATE}/repo"      # absolute repo dir, so the injected cx() can find the TUI from anywhere
-RC="${HOME}/.bashrc"
 MARK_BEGIN="# >>> cost-xray >>>"
 MARK_END="# <<< cost-xray <<<"
 mkdir -p "$STATE"
+
+# --- supervisor: systemd (Linux) | launchd (macOS) | none (manual) ------------
+# Detected once. Every supervisor touch-point routes through the _sv_* helpers, so the Linux
+# path stays byte-for-byte the old behaviour and macOS gets a real LaunchAgent (login-start +
+# KeepAlive auto-restart) instead of falling back to manual mode.
+LAUNCH_DIR="${HOME}/Library/LaunchAgents"
+LABEL="ai.tigerless.cost-xray"
+CODEX_LABEL="ai.tigerless.cost-xray-codex"
+PLIST="${LAUNCH_DIR}/${LABEL}.plist"
+CODEX_PLIST="${LAUNCH_DIR}/${CODEX_LABEL}.plist"
+REVREF="${STATE}/reverse-ref"   # supervisor id the claude() wrapper restarts (unit name / launchd label)
+CODEXREF="${STATE}/codex-ref"
+if [ "$(uname -s)" = "Darwin" ] && command -v launchctl >/dev/null 2>&1; then
+  _SV=launchd
+elif systemctl --user show-environment >/dev/null 2>&1; then
+  _SV=systemd
+else
+  _SV=none
+fi
+
+# Wrappers go to the rc the user's shell actually sources: ~/.bashrc on Linux bash, ~/.zshrc for
+# zsh, ~/.bash_profile for macOS bash (its login shells skip ~/.bashrc).
+_rc_file() {
+  if [ "$(uname -s)" = "Darwin" ] && [ "$(basename "${SHELL:-/bin/zsh}")" = bash ]; then
+    printf '%s' "${HOME}/.bash_profile"
+  elif [ "$(basename "${SHELL:-/bin/bash}")" = zsh ]; then
+    printf '%s' "${HOME}/.zshrc"
+  else
+    printf '%s' "${HOME}/.bashrc"
+  fi
+}
+RC="$(_rc_file)"
 
 # --- port self-adaptation -----------------------------------------------------
 _pick_port() {  # echo first free port at/above $1 (scans up to +100)
@@ -112,9 +143,121 @@ _serve_codex() {
   exec "$md" --mode regular -p "$chosen" -s "$HERE/cost_xray/addon.py"
 }
 
+# --- supervisor ops, by "kind" (reverse=Claude proxy, codex=Codex proxy) ------
+# One seam for both supervisors: systemd writes a user unit, launchd writes a LaunchAgent plist;
+# everything above calls _sv_* and never names systemctl/launchctl directly.
+_k_unit()  { case "$1" in reverse) printf '%s' "$UNIT" ;; codex) printf '%s' "$CODEX_UNIT" ;; esac; }
+_k_svc()   { case "$1" in reverse) printf '%s' "$SERVICE" ;; codex) printf '%s' "$CODEX_SERVICE" ;; esac; }
+_k_plist() { case "$1" in reverse) printf '%s' "$PLIST" ;; codex) printf '%s' "$CODEX_PLIST" ;; esac; }
+_k_label() { case "$1" in reverse) printf '%s' "$LABEL" ;; codex) printf '%s' "$CODEX_LABEL" ;; esac; }
+_k_entry() { case "$1" in reverse) printf '%s' "_serve" ;; codex) printf '%s' "_serve_codex" ;; esac; }
+_k_log()   { case "$1" in reverse) printf '%s' "$LOGFILE" ;; codex) printf '%s' "$CODEX_LOGFILE" ;; esac; }
+_k_desc()  { case "$1" in
+               reverse) printf '%s' "cost-xray capture proxy for coding agents (reverse:anthropic)" ;;
+               codex)   printf '%s' "cost-xray codex forward proxy (regular mode, self-healing)" ;;
+             esac; }
+
+# The launchd domain we can actually reach: gui/<uid> when a GUI session exists (the canonical
+# LaunchAgent domain), else user/<uid> (works headless / over SSH). A given context stays on one.
+_ld_domain() {
+  if launchctl print "gui/$(id -u)" >/dev/null 2>&1; then printf 'gui/%s' "$(id -u)"
+  else printf 'user/%s' "$(id -u)"; fi
+}
+
+_systemd_write() {  # kind → user unit (Linux)
+  cat > "$(_k_unit "$1")" <<EOF
+[Unit]
+Description=$(_k_desc "$1")
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+EnvironmentFile=-$ENVFILE
+ExecStart=$SELF $(_k_entry "$1")
+Restart=always
+RestartSec=3
+
+[Install]
+WantedBy=default.target
+EOF
+  echo "wrote unit $(_k_unit "$1")"
+}
+
+_launchd_write() {  # kind → LaunchAgent plist (macOS): RunAtLoad + KeepAlive = login-start + auto-restart
+  mkdir -p "$LAUNCH_DIR"
+  cat > "$(_k_plist "$1")" <<EOF
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key><string>$(_k_label "$1")</string>
+  <key>ProgramArguments</key>
+  <array><string>/bin/bash</string><string>$SELF</string><string>$(_k_entry "$1")</string></array>
+  <key>RunAtLoad</key><true/>
+  <key>KeepAlive</key><true/>
+  <key>StandardOutPath</key><string>$(_k_log "$1")</string>
+  <key>StandardErrorPath</key><string>$(_k_log "$1")</string>
+</dict>
+</plist>
+EOF
+  echo "wrote launch agent $(_k_plist "$1")"
+}
+
+_sv_enable() {  # kind → install (login/boot-start + auto-restart) and start now
+  case "$_SV" in
+    launchd) _launchd_write "$1"
+             launchctl bootout "$(_ld_domain)/$(_k_label "$1")" 2>/dev/null || true
+             launchctl bootstrap "$(_ld_domain)" "$(_k_plist "$1")" 2>/dev/null \
+               || launchctl load -w "$(_k_plist "$1")" 2>/dev/null || true ;;
+    systemd) _systemd_write "$1"; systemctl --user daemon-reload
+             systemctl --user enable --now "$(_k_svc "$1")" ;;
+  esac
+}
+
+_sv_disable() {  # kind → remove the unit/agent (keeps captured data)
+  case "$_SV" in
+    launchd) launchctl bootout "$(_ld_domain)/$(_k_label "$1")" 2>/dev/null || true
+             rm -f "$(_k_plist "$1")" ;;
+    systemd) systemctl --user disable --now "$(_k_svc "$1")" 2>/dev/null || true
+             rm -f "$(_k_unit "$1")"; systemctl --user daemon-reload 2>/dev/null || true ;;
+  esac
+}
+
+_sv_start() {  # kind → start the running instance (no install change)
+  case "$_SV" in
+    launchd) launchctl kickstart "$(_ld_domain)/$(_k_label "$1")" 2>/dev/null \
+               || launchctl bootstrap "$(_ld_domain)" "$(_k_plist "$1")" 2>/dev/null || true ;;
+    systemd) systemctl --user start "$(_k_svc "$1")" ;;
+  esac
+}
+
+_sv_stop() {  # kind → stop the running instance (launchd KeepAlive respawns unless booted out)
+  case "$_SV" in
+    launchd) launchctl bootout "$(_ld_domain)/$(_k_label "$1")" 2>/dev/null || true ;;
+    systemd) systemctl --user stop "$(_k_svc "$1")" ;;
+  esac
+}
+
+_sv_is_active() {  # kind → active|inactive|unknown
+  case "$_SV" in
+    launchd) if launchctl print "$(_ld_domain)/$(_k_label "$1")" >/dev/null 2>&1; then echo active; else echo inactive; fi ;;
+    systemd) systemctl --user is-active "$(_k_svc "$1")" 2>/dev/null || echo unknown ;;
+    *) echo unknown ;;
+  esac
+}
+
+_sv_installed() {  # kind → is the unit/agent present on disk?
+  case "$_SV" in
+    launchd) [ -f "$(_k_plist "$1")" ] ;;
+    systemd) [ -f "$(_k_unit "$1")" ] ;;
+    *) return 1 ;;
+  esac
+}
+
 # --- mode helpers -------------------------------------------------------------
-_unit_installed() { [ -f "$UNIT" ]; }
-_codex_unit_installed() { [ -f "$CODEX_UNIT" ]; }
+_unit_installed() { _sv_installed reverse; }
+_codex_unit_installed() { _sv_installed codex; }
 
 _running() {  # manual-mode: echoes the live PID, or nothing
   [ -f "$PIDFILE" ] || return 1
@@ -169,9 +312,11 @@ _stop_manual() {  # label pidfile
 start() {
   rm -f "$PAUSEFILE"                                 # resume monitoring (wrappers route again)
   if _unit_installed || _codex_unit_installed; then
-    if _unit_installed; then systemctl --user start "$SERVICE"; fi
-    if _codex_unit_installed; then systemctl --user start "$CODEX_SERVICE"; fi
-    sleep 1; echo "Started (systemd --user)."; status; return 0
+    if _unit_installed; then _sv_start reverse; fi
+    if _codex_unit_installed; then _sv_start codex; fi
+    sleep 1
+    case "$_SV" in launchd) echo "Started (launchd)." ;; *) echo "Started (systemd --user)." ;; esac
+    status; return 0
   fi
   echo "Starting capture proxies (detached)..."
   _start_manual "claude reverse proxy" _serve "$PIDFILE" "$LOGFILE"
@@ -186,8 +331,8 @@ start() {
 # stop the proxies without touching the pause marker (shared by stop + restart)
 _stop_services() {
   if _unit_installed || _codex_unit_installed || _mat_unit_installed; then
-    if _unit_installed; then systemctl --user stop "$SERVICE"; fi
-    if _codex_unit_installed; then systemctl --user stop "$CODEX_SERVICE"; fi
+    if _unit_installed; then _sv_stop reverse; fi
+    if _codex_unit_installed; then _sv_stop codex; fi
     if _mat_unit_installed; then systemctl --user stop "$MAT_SERVICE"; fi
     return 0
   fi
@@ -204,11 +349,11 @@ stop() {
   echo "the proxy until you resume.  Resume capture:  cx start"
 }
 
-_status_one() {  # label service unit_check_fn run_check_fn port target
-  local label="$1" svc="$2" unit_check="$3" run_check="$4" port="$5" target="$6" pid st
+_status_one() {  # label kind unit_check_fn run_check_fn port target
+  local label="$1" kind="$2" unit_check="$3" run_check="$4" port="$5" target="$6" pid st
   if "$unit_check"; then
-    st="$(systemctl --user is-active "$svc" 2>/dev/null || true)"
-    echo "  $label: ${st:-unknown} (systemd)   :$port -> $target"
+    st="$(_sv_is_active "$kind")"
+    echo "  $label: ${st:-unknown} ($_SV)   :$port -> $target"
   elif pid="$("$run_check" 2>/dev/null)"; then
     echo "  $label: running pid $pid   :$port -> $target"
   else
@@ -217,9 +362,9 @@ _status_one() {  # label service unit_check_fn run_check_fn port target
 }
 
 status() {
-  _status_one "reverse(claude)" "$SERVICE" _unit_installed _running \
+  _status_one "reverse(claude)" reverse _unit_installed _running \
               "$(_live_port)" "${UPSTREAM:-$DEFAULT_UPSTREAM}"
-  _status_one "forward(codex)" "$CODEX_SERVICE" _codex_unit_installed _codex_running \
+  _status_one "forward(codex)" codex _codex_unit_installed _codex_running \
               "$(_codex_live_port)" "chatgpt.com (regular mode, self-healing)"
   echo "  materializer:    event-driven (a warm consumer process, started by the proxy, signalled per turn)"
   local n; n="$(find "$STATE/sessions" -mindepth 2 -maxdepth 2 -type d 2>/dev/null | wc -l | tr -d ' ' || true)"
@@ -249,7 +394,14 @@ _ctxray_up() {
   [ -n "${CX_OFF:-}" ] && return 1                        # CX_OFF=1 → force direct (one-shot escape hatch)
   [ -e "$HOME/.cost-xray/paused" ] && return 1            # user stopped monitoring → run direct
   _ctxray_listening "$1" && return 0
-  systemctl --user start "$2" 2>/dev/null || true            # down (crash/boot) → bring it back
+  local dom
+  if command -v launchctl >/dev/null 2>&1; then           # down (crash/boot) → bring it back
+    if launchctl print "gui/$(id -u)" >/dev/null 2>&1; then dom="gui/$(id -u)"; else dom="user/$(id -u)"; fi
+    launchctl kickstart "$dom/$2" 2>/dev/null \
+      || launchctl bootstrap "$dom" "$HOME/Library/LaunchAgents/$2.plist" 2>/dev/null || true
+  else
+    systemctl --user start "$2" 2>/dev/null || true
+  fi
   local i=0; while [ "$i" -lt 8 ]; do _ctxray_listening "$1" && return 0; sleep 0.25; i=$((i+1)); done
   return 1                                                   # couldn't start → run direct (never break)
 }
@@ -274,8 +426,9 @@ CTXRAY_COMMON
     cat >> "$RC" <<'CLAUDEBLOCK'
 # Claude → cost-xray reverse proxy; self-healing; direct only when paused/un-restartable.
 claude() {
-  local s="$HOME/.cost-xray" p; p="$(cat "$s/port" 2>/dev/null || echo 8788)"
-  if _ctxray_up "$p" cost-xray.service; then
+  local s="$HOME/.cost-xray" p ref; p="$(cat "$s/port" 2>/dev/null || echo 8788)"
+  ref="$(cat "$s/reverse-ref" 2>/dev/null || echo cost-xray.service)"
+  if _ctxray_up "$p" "$ref"; then
     ANTHROPIC_BASE_URL="http://127.0.0.1:$p" command claude "$@"
   else
     command claude "$@"
@@ -287,9 +440,10 @@ CLAUDEBLOCK
     cat >> "$RC" <<'CODEXBLOCK'
 # Codex → cost-xray forward proxy (+ scoped CA); self-healing; direct only when paused/un-restartable.
 codex() {
-  local s="$HOME/.cost-xray" p; p="$(cat "$s/codex-port" 2>/dev/null || echo 8789)"
+  local s="$HOME/.cost-xray" p ref; p="$(cat "$s/codex-port" 2>/dev/null || echo 8789)"
   local ca="$s/codex-ca-bundle.pem"
-  if [ -f "$ca" ] && _ctxray_up "$p" cost-xray-codex.service; then
+  ref="$(cat "$s/codex-ref" 2>/dev/null || echo cost-xray-codex.service)"
+  if [ -f "$ca" ] && _ctxray_up "$p" "$ref"; then
     HTTP_PROXY="http://127.0.0.1:$p" HTTPS_PROXY="http://127.0.0.1:$p" \
     SSL_CERT_FILE="$ca" NODE_EXTRA_CA_CERTS="$ca" command codex "$@"
   else
@@ -320,12 +474,15 @@ install_service() {
     echo "mitmdump not found. Build the venv + deps first:  ./install.sh  (provisions Python via uv)" >&2
     exit 1
   fi
-  if ! systemctl --user show-environment >/dev/null 2>&1; then
-    echo "systemd --user is not available here." >&2
+  if [ "$_SV" = none ]; then
+    echo "No service supervisor (systemd --user / launchd) available here." >&2
     echo "Fall back to manual mode: ./run.sh start  (and add the claude() wrapper by hand)." >&2
     exit 1
   fi
-  mkdir -p "$STATE" "$STATE/sessions" "$(dirname "$UNIT")"
+  mkdir -p "$STATE" "$STATE/sessions"
+  [ "$_SV" = systemd ] && mkdir -p "$(dirname "$UNIT")"
+  [ "$_SV" = launchd ] && mkdir -p "$LAUNCH_DIR"
+  true
   # config: only write if absent, so user edits survive re-install
   if [ ! -f "$ENVFILE" ]; then
     { echo "UPSTREAM=$DEFAULT_UPSTREAM"; echo "MITMDUMP=$md"; echo "PORT=$DEFAULT_PORT"
@@ -334,6 +491,11 @@ install_service() {
   fi
   rm -f "$PAUSEFILE"                                 # install (re)enables monitoring
   printf '%s' "$HERE" > "$REPOFILE"                  # so the injected cx() finds the TUI anywhere
+  if [ "$_SV" = launchd ]; then                      # what the wrappers tell _ctxray_up to restart
+    printf '%s' "$LABEL" > "$REVREF"; printf '%s' "$CODEX_LABEL" > "$CODEXREF"
+  else
+    printf '%s' "$SERVICE" > "$REVREF"; printf '%s' "$CODEX_SERVICE" > "$CODEXREF"
+  fi
 
   # Which agent(s) to capture? Both services are conditional, and the choice is AUTHORITATIVE:
   # a re-install sets up the selected ones and tears the rest down.
@@ -345,13 +507,16 @@ install_service() {
   if [ "$codex"  = 1 ]; then _install_codex "$md"; else _remove_codex; fi
   _remove_mat                                        # materialize is per-turn now; kill any old poll daemon
 
-  if ! loginctl enable-linger "$USER" 2>/dev/null; then
+  if [ "$_SV" = systemd ] && ! loginctl enable-linger "$USER" 2>/dev/null; then
     echo "  note: to also start before you log in, run once:"
     echo "        sudo loginctl enable-linger $USER"
   fi
   _inject_shell "$claude" "$codex"
   echo
-  echo "Installed. systemd --user service(s): boot-start + auto-restart on crash."
+  case "$_SV" in
+    launchd) echo "Installed. launchd agent(s): login-start + KeepAlive auto-restart." ;;
+    *)       echo "Installed. systemd --user service(s): boot-start + auto-restart on crash." ;;
+  esac
   echo "This does NOT change what your agent can do, its results, or cost — it's a local hop you"
   echo "can pause anytime with  cx stop . (Codex streaming is untouched; Claude streaming is"
   echo "currently buffered — you see the full response at once.)"
@@ -369,35 +534,11 @@ install_service() {
 }
 
 # Set up the Claude reverse-proxy track (reverse:anthropic, no cert). Conditional on selection.
-_install_reverse() {
-  cat > "$UNIT" <<EOF
-[Unit]
-Description=cost-xray capture proxy for coding agents (reverse:anthropic)
-After=network-online.target
-Wants=network-online.target
-
-[Service]
-Type=simple
-EnvironmentFile=-$ENVFILE
-ExecStart=$SELF _serve
-Restart=always
-RestartSec=3
-
-[Install]
-WantedBy=default.target
-EOF
-  echo "wrote unit $UNIT"
-  systemctl --user daemon-reload
-  systemctl --user enable --now "$SERVICE"
-}
+_install_reverse() { _sv_enable reverse; }
 
 # Tear down the reverse track (claude not selected). Keeps captured data.
 _remove_reverse() {
-  if _unit_installed; then
-    systemctl --user disable --now "$SERVICE" 2>/dev/null || true
-    rm -f "$UNIT"; systemctl --user daemon-reload 2>/dev/null || true
-    echo "claude not selected — removed $SERVICE (data kept)"
-  fi
+  if _unit_installed; then _sv_disable reverse; echo "claude not selected — removed (data kept)"; fi
 }
 
 # Pick which agents to capture → sets the global SELECTED_AGENTS ("claude" or "claude codex").
@@ -464,35 +605,13 @@ _build_ca_bundle() {
 _install_codex() {  # $1 = mitmdump path (unused here; kept for symmetry/future)
   grep -q '^CODEX_PORT=' "$ENVFILE" 2>/dev/null || { echo "CODEX_PORT=$DEFAULT_CODEX_PORT" >> "$ENVFILE"
     echo "added CODEX_PORT=$DEFAULT_CODEX_PORT to $ENVFILE"; }
-  cat > "$CODEX_UNIT" <<EOF
-[Unit]
-Description=cost-xray codex forward proxy (regular mode, self-healing)
-After=network-online.target
-Wants=network-online.target
-
-[Service]
-Type=simple
-EnvironmentFile=-$ENVFILE
-ExecStart=$SELF _serve_codex
-Restart=always
-RestartSec=3
-
-[Install]
-WantedBy=default.target
-EOF
-  echo "wrote unit $CODEX_UNIT"
-  systemctl --user daemon-reload
-  systemctl --user enable --now "$CODEX_SERVICE"
+  _sv_enable codex
   _build_ca_bundle   # waits for the codex proxy to generate ~/.mitmproxy CA, then bundles it
 }
 
 # Tear down any prior codex setup (claude-only install is authoritative). Keeps captured data.
 _remove_codex() {
-  if _codex_unit_installed; then
-    systemctl --user disable --now "$CODEX_SERVICE" 2>/dev/null || true
-    rm -f "$CODEX_UNIT"; systemctl --user daemon-reload 2>/dev/null || true
-    echo "codex not selected — removed $CODEX_SERVICE (data kept)"
-  fi
+  if _codex_unit_installed; then _sv_disable codex; echo "codex not selected — removed (data kept)"; fi
 }
 
 # Tear down a materializer poll-daemon unit left by an older version. Materialize is now event-driven
@@ -506,16 +625,10 @@ _remove_mat() {
 }
 
 uninstall_service() {
-  if _unit_installed; then
-    systemctl --user disable --now "$SERVICE" 2>/dev/null || true
-    rm -f "$UNIT"; echo "removed $SERVICE"
-  fi
-  if _codex_unit_installed; then
-    systemctl --user disable --now "$CODEX_SERVICE" 2>/dev/null || true
-    rm -f "$CODEX_UNIT"; echo "removed $CODEX_SERVICE"
-  fi
+  if _unit_installed; then _sv_disable reverse; echo "removed claude proxy"; fi
+  if _codex_unit_installed; then _sv_disable codex; echo "removed codex proxy"; fi
   _remove_mat                                        # also drop an old poll-daemon unit if present
-  systemctl --user daemon-reload 2>/dev/null || true
+  { [ "$_SV" = systemd ] && systemctl --user daemon-reload 2>/dev/null; } || true
   _remove_shell
   echo "Uninstalled. Captured data kept at $STATE  (rm -rf to clear)."
 }
