@@ -10,9 +10,9 @@
   <img src="https://img.shields.io/badge/license-MIT-yellow.svg" alt="license MIT" />
 </p>
 
-cost-xray traces the token cost of every Claude Code and Codex request to its source: each tool schema, MCP server, message, and individual tool call, down to its output. Your usage logs show one total per call. cost-xray shows what inside the call spent it.
+cost-xray reads the raw API requests from Claude Code and Codex and breaks each one's token cost down to its source — every tool schema, MCP server, message, and tool call, down to its output. Your usage logs show one total per call; cost-xray shows what inside the call spent it.
 
-It reads the raw API request, not the logs. A local mitmproxy hop captures the exact bytes the model receives and prices every token by cache state — fresh, cache-read, or cache-write. Everything runs locally: 127.0.0.1 only, no telemetry, credentials redacted before disk.
+A local mitmproxy hop captures the exact bytes the model receives and prices every token by cache state — fresh, cache-read, or cache-write. Everything runs locally: 127.0.0.1 only, no telemetry, credentials redacted before disk.
 
 <div align="center">
 <table>
@@ -46,7 +46,7 @@ Then open a **new terminal** and run `claude` / `codex` exactly as before — ca
 cx
 ```
 
-Capture runs as a background service (auto-start on boot, self-healing, port-adaptive) and **doesn't change what your agent does, its results, or its cost** — pause anytime with `cx stop`, or prefix a one-off run with `CX_OFF=1`. See [docs/install.md](docs/install.md) for systemd details, GUI agents (Cursor base-URL setup), manual (no-systemd) mode, and troubleshooting.
+Capture runs as a background service (auto-start on boot, self-healing, port-adaptive) and **doesn't change what your agent does, its results, or its cost** — pause anytime with `cx stop`. See [docs/install.md](docs/install.md) for systemd details, GUI agents (Cursor base-URL setup), manual (no-systemd) mode, and troubleshooting.
 
 ## Usage
 
