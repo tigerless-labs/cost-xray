@@ -69,8 +69,6 @@ LABEL="ai.tigerless.cost-xray"
 CODEX_LABEL="ai.tigerless.cost-xray-codex"
 PLIST="${LAUNCH_DIR}/${LABEL}.plist"
 CODEX_PLIST="${LAUNCH_DIR}/${CODEX_LABEL}.plist"
-REVREF="${STATE}/reverse-ref"   # supervisor id the claude() wrapper restarts (unit name / launchd label)
-CODEXREF="${STATE}/codex-ref"
 if [ "$(uname -s)" = "Darwin" ] && command -v launchctl >/dev/null 2>&1; then
   _SV=launchd
 elif systemctl --user show-environment >/dev/null 2>&1; then
@@ -417,13 +415,11 @@ _ctxray_up() {
   [ -n "${CX_OFF:-}" ] && return 1                        # CX_OFF=1 → force direct (one-shot escape hatch)
   [ -e "$HOME/.cost-xray/paused" ] && return 1            # user stopped monitoring → run direct
   _ctxray_listening "$1" && return 0
-  local dom
-  if command -v launchctl >/dev/null 2>&1; then           # down (crash/boot) → bring it back
-    if launchctl print "gui/$(id -u)" >/dev/null 2>&1; then dom="gui/$(id -u)"; else dom="user/$(id -u)"; fi
-    launchctl kickstart "$dom/$2" 2>/dev/null \
-      || launchctl bootstrap "$dom" "$HOME/Library/LaunchAgents/$2.plist" 2>/dev/null || true
-  else
-    systemctl --user start "$2" 2>/dev/null || true
+  if command -v systemctl >/dev/null 2>&1 && systemctl --user show-environment >/dev/null 2>&1; then
+    systemctl --user start "$2" 2>/dev/null || true        # Linux/systemd: bring it back (unchanged)
+  else                                                      # macOS/launchd (or no GUI) → run.sh self-heals
+    local repo; repo="$(cat "$HOME/.cost-xray/repo" 2>/dev/null)"
+    [ -n "$repo" ] && bash "$repo/run.sh" start >/dev/null 2>&1 || true
   fi
   local i=0; while [ "$i" -lt 8 ]; do _ctxray_listening "$1" && return 0; sleep 0.25; i=$((i+1)); done
   return 1                                                   # couldn't start → run direct (never break)
@@ -449,9 +445,8 @@ CTXRAY_COMMON
     cat >> "$RC" <<'CLAUDEBLOCK'
 # Claude → cost-xray reverse proxy; self-healing; direct only when paused/un-restartable.
 claude() {
-  local s="$HOME/.cost-xray" p ref; p="$(cat "$s/port" 2>/dev/null || echo 8788)"
-  ref="$(cat "$s/reverse-ref" 2>/dev/null || echo cost-xray.service)"
-  if _ctxray_up "$p" "$ref"; then
+  local s="$HOME/.cost-xray" p; p="$(cat "$s/port" 2>/dev/null || echo 8788)"
+  if _ctxray_up "$p" cost-xray.service; then
     ANTHROPIC_BASE_URL="http://127.0.0.1:$p" command claude "$@"
   else
     command claude "$@"
@@ -463,10 +458,9 @@ CLAUDEBLOCK
     cat >> "$RC" <<'CODEXBLOCK'
 # Codex → cost-xray forward proxy (+ scoped CA); self-healing; direct only when paused/un-restartable.
 codex() {
-  local s="$HOME/.cost-xray" p ref; p="$(cat "$s/codex-port" 2>/dev/null || echo 8789)"
+  local s="$HOME/.cost-xray" p; p="$(cat "$s/codex-port" 2>/dev/null || echo 8789)"
   local ca="$s/codex-ca-bundle.pem"
-  ref="$(cat "$s/codex-ref" 2>/dev/null || echo cost-xray-codex.service)"
-  if [ -f "$ca" ] && _ctxray_up "$p" "$ref"; then
+  if [ -f "$ca" ] && _ctxray_up "$p" cost-xray-codex.service; then
     HTTP_PROXY="http://127.0.0.1:$p" HTTPS_PROXY="http://127.0.0.1:$p" \
     SSL_CERT_FILE="$ca" NODE_EXTRA_CA_CERTS="$ca" command codex "$@"
   else
@@ -514,11 +508,6 @@ install_service() {
   fi
   rm -f "$PAUSEFILE"                                 # install (re)enables monitoring
   printf '%s' "$HERE" > "$REPOFILE"                  # so the injected cx() finds the TUI anywhere
-  if [ "$_SV" = launchd ]; then                      # what the wrappers tell _ctxray_up to restart
-    printf '%s' "$LABEL" > "$REVREF"; printf '%s' "$CODEX_LABEL" > "$CODEXREF"
-  else
-    printf '%s' "$SERVICE" > "$REVREF"; printf '%s' "$CODEX_SERVICE" > "$CODEXREF"
-  fi
 
   # Which agent(s) to capture? Both services are conditional, and the choice is AUTHORITATIVE:
   # a re-install sets up the selected ones and tears the rest down.
