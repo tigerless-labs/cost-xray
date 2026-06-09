@@ -26,6 +26,7 @@
 # taken, and writes the live port to ~/.cost-xray/port. The installed shell
 # wrapper reads that file, so the client always finds the proxy (no hardcoding).
 set -euo pipefail
+: "${USER:=$(id -un)}"   # CI/docker/cron may not export USER; set -u makes a bare $USER fatal
 
 DEFAULT_PORT="${PORT:-8788}"
 DEFAULT_UPSTREAM="${UPSTREAM:-https://api.anthropic.com}"
@@ -221,7 +222,7 @@ status() {
   _status_one "forward(codex)" "$CODEX_SERVICE" _codex_unit_installed _codex_running \
               "$(_codex_live_port)" "chatgpt.com (regular mode, self-healing)"
   echo "  materializer:    event-driven (a warm consumer process, started by the proxy, signalled per turn)"
-  local n; n="$(find "$STATE/sessions" -mindepth 2 -maxdepth 2 -type d 2>/dev/null | wc -l | tr -d ' ')"
+  local n; n="$(find "$STATE/sessions" -mindepth 2 -maxdepth 2 -type d 2>/dev/null | wc -l | tr -d ' ' || true)"
   echo "sessions captured: ${n:-0}  (under $STATE/sessions/)"
 }
 
@@ -324,7 +325,7 @@ install_service() {
     echo "Fall back to manual mode: ./run.sh start  (and add the claude() wrapper by hand)." >&2
     exit 1
   fi
-  mkdir -p "$STATE" "$(dirname "$UNIT")"
+  mkdir -p "$STATE" "$STATE/sessions" "$(dirname "$UNIT")"
   # config: only write if absent, so user edits survive re-install
   if [ ! -f "$ENVFILE" ]; then
     { echo "UPSTREAM=$DEFAULT_UPSTREAM"; echo "MITMDUMP=$md"; echo "PORT=$DEFAULT_PORT"
