@@ -204,12 +204,34 @@ EOF
   echo "wrote launch agent $(_k_plist "$1")"
 }
 
+_listening() { (exec 3<>"/dev/tcp/127.0.0.1/$1") 2>/dev/null; }   # is 127.0.0.1:$1 accepting?
+_kind_port() { case "$1" in reverse) _live_port ;; codex) _codex_live_port ;; esac; }
+_kind_start_manual() {  # kind → start the proxy now via nohup (writes its pidfile)
+  case "$1" in
+    reverse) _start_manual "claude reverse proxy" _serve "$PIDFILE" "$LOGFILE" ;;
+    codex)   _start_manual "codex forward proxy"  _serve_codex "$CODEX_PIDFILE" "$CODEX_LOGFILE" ;;
+  esac
+}
+_kind_stop_manual() {  # kind → stop a nohup-started proxy
+  case "$1" in
+    reverse) _stop_manual "claude reverse proxy" "$PIDFILE" ;;
+    codex)   _stop_manual "codex forward proxy"  "$CODEX_PIDFILE" ;;
+  esac
+}
+
+# Load the LaunchAgent into the reachable domain. macOS only loads agents from a GUI session, so
+# over headless SSH (no GUI) bootstrap fails — then fall back to a nohup start so capture is live
+# now; the plist still auto-loads at the next GUI login. Gated on bootstrap's exit code, so a real
+# GUI install (bootstrap succeeds → launchd runs the proxy) never double-starts.
+_launchd_start() {  # kind
+  launchctl bootout "$(_ld_domain)/$(_k_label "$1")" 2>/dev/null || true
+  if launchctl bootstrap "$(_ld_domain)" "$(_k_plist "$1")" 2>/dev/null; then return 0; fi
+  _kind_start_manual "$1"
+}
+
 _sv_enable() {  # kind → install (login/boot-start + auto-restart) and start now
   case "$_SV" in
-    launchd) _launchd_write "$1"
-             launchctl bootout "$(_ld_domain)/$(_k_label "$1")" 2>/dev/null || true
-             launchctl bootstrap "$(_ld_domain)" "$(_k_plist "$1")" 2>/dev/null \
-               || launchctl load -w "$(_k_plist "$1")" 2>/dev/null || true ;;
+    launchd) _launchd_write "$1"; _launchd_start "$1" ;;
     systemd) _systemd_write "$1"; systemctl --user daemon-reload
              systemctl --user enable --now "$(_k_svc "$1")" ;;
   esac
@@ -218,6 +240,7 @@ _sv_enable() {  # kind → install (login/boot-start + auto-restart) and start n
 _sv_disable() {  # kind → remove the unit/agent (keeps captured data)
   case "$_SV" in
     launchd) launchctl bootout "$(_ld_domain)/$(_k_label "$1")" 2>/dev/null || true
+             _kind_stop_manual "$1" >/dev/null 2>&1 || true
              rm -f "$(_k_plist "$1")" ;;
     systemd) systemctl --user disable --now "$(_k_svc "$1")" 2>/dev/null || true
              rm -f "$(_k_unit "$1")"; systemctl --user daemon-reload 2>/dev/null || true ;;
@@ -226,22 +249,22 @@ _sv_disable() {  # kind → remove the unit/agent (keeps captured data)
 
 _sv_start() {  # kind → start the running instance (no install change)
   case "$_SV" in
-    launchd) launchctl kickstart "$(_ld_domain)/$(_k_label "$1")" 2>/dev/null \
-               || launchctl bootstrap "$(_ld_domain)" "$(_k_plist "$1")" 2>/dev/null || true ;;
+    launchd) _launchd_start "$1" ;;
     systemd) systemctl --user start "$(_k_svc "$1")" ;;
   esac
 }
 
 _sv_stop() {  # kind → stop the running instance (launchd KeepAlive respawns unless booted out)
   case "$_SV" in
-    launchd) launchctl bootout "$(_ld_domain)/$(_k_label "$1")" 2>/dev/null || true ;;
+    launchd) launchctl bootout "$(_ld_domain)/$(_k_label "$1")" 2>/dev/null || true
+             _kind_stop_manual "$1" >/dev/null 2>&1 || true ;;
     systemd) systemctl --user stop "$(_k_svc "$1")" ;;
   esac
 }
 
-_sv_is_active() {  # kind → active|inactive|unknown
+_sv_is_active() {  # kind → active|inactive|unknown  (active = the proxy is actually listening)
   case "$_SV" in
-    launchd) if launchctl print "$(_ld_domain)/$(_k_label "$1")" >/dev/null 2>&1; then echo active; else echo inactive; fi ;;
+    launchd) if _listening "$(_kind_port "$1")"; then echo active; else echo inactive; fi ;;
     systemd) systemctl --user is-active "$(_k_svc "$1")" 2>/dev/null || echo unknown ;;
     *) echo unknown ;;
   esac
