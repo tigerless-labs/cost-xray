@@ -95,9 +95,9 @@ When you're logged into Claude Code (or have an API key), cost-xray sizes the ha
 
 The wrappers are per-command and self-healing: if the proxy is down, the wrapper restarts it and routes through; if it can't, the agent runs direct — never broken. Stop monitoring anytime with `cx stop` (agents then run direct).
 
-### Compact on disk
+### Capture everything, store almost nothing
 
-A long context session re-sends its whole history every turn, so the raw capture is hugely repetitive. cost-xray stores it **deduplicated** — each unique block (message, schema, tool result) once, plus a small per-turn delta — so disk stays small even across million-token sessions, and full per-turn bytes rebuild on demand.
+cost-xray keeps the complete raw API traffic — but a long session re-sends its whole history every turn, so the capture is hugely repetitive. We **deduplicate** it: each unique block (message, schema, tool result) is stored once, with a tiny per-turn delta. Full per-turn bytes rebuild on demand. Disk stays small even across million-token sessions.
 
 ## Why not just read the logs?
 
