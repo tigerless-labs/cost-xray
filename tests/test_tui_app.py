@@ -263,6 +263,26 @@ def test_cost_table_is_drillable_and_aligned(monkeypatch, tmp_path):
     asyncio.run(go())
 
 
+def test_detail_renders_cost_above_context(monkeypatch, tmp_path):
+    from cost_xray import tui
+    from cost_xray.tui_app import DetailScreen, XrayApp
+
+    monkeypatch.setattr(tui, "_sessions", lambda: [])
+    monkeypatch.setattr(tui, "_summary", lambda d: _summary(**{"Static__System prompt": 0.1}))
+    monkeypatch.setattr(tui, "_latest_derived", lambda d: {"window": 1000, "events": []})
+
+    async def go():
+        app = XrayApp()
+        async with app.run_test():
+            screen = DetailScreen([tmp_path], "claude", "detail", show_context=True)
+            await app.push_screen(screen)
+            await app.workers.wait_for_complete()
+            ids = [w.id for w in screen.query("DrillTable")]
+            assert ids == ["cost", "context"]
+
+    asyncio.run(go())
+
+
 def test_context_table_drills_to_mcp_server(monkeypatch, tmp_path):
     from cost_xray import tui
     from cost_xray.tui_app import DetailScreen, XrayApp

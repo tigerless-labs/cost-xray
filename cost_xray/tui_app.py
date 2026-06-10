@@ -384,11 +384,11 @@ class DetailScreen(Screen):
     def compose(self) -> ComposeResult:
         yield Header()
         yield Static(id="title")
+        yield self._cost
         if self.show_context:
             yield self._ctx
         else:
             yield Static(id="ctxnote")
-        yield self._cost
         yield Static(id="content")
         yield Footer()
 
