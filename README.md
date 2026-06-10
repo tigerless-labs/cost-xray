@@ -1,18 +1,17 @@
 <h1 align="center">cost-xray</h1>
 
-<p align="center"><strong>See where your AI coding tokens go — and what each one costs.</strong></p>
+<p align="center"><strong>See what your AI coding agent actually sends to the API — and what each part costs.</strong></p>
 
 <p align="center">
   <img src="https://img.shields.io/badge/agents-Claude%20Code%20%C2%B7%20Codex-brightgreen.svg" alt="agents" />
   <img src="https://img.shields.io/badge/capture-mitmproxy-blue.svg" alt="capture" />
-  <img src="https://img.shields.io/badge/tokenizer-count__tokens%20exact-purple.svg" alt="tokenizer" />
   <img src="https://img.shields.io/badge/local--only-no%20telemetry-success.svg" alt="local only" />
   <img src="https://img.shields.io/badge/license-MIT-yellow.svg" alt="license MIT" />
 </p>
 
-cost-xray reads the raw API requests from Claude Code and Codex and breaks each one's token cost down to its source — every tool schema, MCP server, message, and tool call, down to its output. Your usage logs show one total per call; cost-xray shows what inside the call spent it.
+Most usage tools read local logs. That shows the total cost of a call or session, but it misses the request-time context assembled before the model is invoked: system prompts, tool schemas, MCP blocks, tool results, cache reads/writes, and previous thinking blocks.
 
-A local mitmproxy hop captures the exact bytes the model receives and prices every token by cache state — fresh, cache-read, or cache-write. Everything runs locally: 127.0.0.1 only, no telemetry, credentials redacted before disk.
+cost-xray captures the actual local API traffic for Claude Code and Codex, then attributes tokens and dollars back to the sources inside the request. It shows not just how much a turn cost, but why it cost that much.
 
 <div align="center">
 <table>
