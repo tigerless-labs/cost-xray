@@ -5,8 +5,8 @@ import re
 
 from cost_xray import detectors
 from cost_xray import events as ev
+from cost_xray.adapters import naming
 
-_NAME_MAX = 40
 _CWD_RE = re.compile(
     r"invoked in the following environment:.{0,200}?[Pp]rimary working directory:\s*(/[^\s\"',\\]+)",
     re.S)
@@ -23,16 +23,17 @@ def project_name(records):
     return None
 
 
-def _first_human_text(content):
-    if isinstance(content, str):
-        return content
-    if isinstance(content, list):
-        for b in content:
-            if isinstance(b, dict) and b.get("type") == "text":
-                t = (b.get("text") or "").strip()
-                if t and not t.startswith("<"):
-                    return t
-    return None
+def _user_texts(msgs):
+    for m in msgs or []:
+        if not isinstance(m, dict) or m.get("role") != "user":
+            continue
+        content = m.get("content")
+        if isinstance(content, str):
+            yield content
+        elif isinstance(content, list):
+            for b in content:
+                if isinstance(b, dict) and b.get("type") == "text":
+                    yield b.get("text") or ""
 
 
 def session_name(records):
@@ -42,17 +43,8 @@ def session_name(records):
         msgs = req.get("messages") if isinstance(req, dict) else None
         if msgs and (best is None or len(msgs) > len(best)):
             best = msgs
-    for m in best or []:
-        if m.get("role") != "user":
-            continue
-        t = _first_human_text(m.get("content"))
-        if not t:
-            continue
-        t = " ".join(t.split())
-        if t.lower() == "quota":
-            continue
-        return t[:_NAME_MAX] + ("…" if len(t) > _NAME_MAX else "")
-    return None
+    return naming.human_label(
+        t for t in _user_texts(best) if t.strip().lower() != "quota")
 
 
 THINKING_R = 0.39

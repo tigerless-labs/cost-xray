@@ -4,10 +4,10 @@ import json
 import re
 
 from cost_xray import events as ev
+from cost_xray.adapters import naming
 
 RESPONSES_PATH = "/backend-api/codex/responses"
 
-_NAME_MAX = 40
 _CWD_RE = re.compile(r"(?:working directory:|<cwd>)\s*(/[^\s\"'<,\\]+)", re.I)
 
 
@@ -19,7 +19,7 @@ def project_name(records):
     return None
 
 
-def session_name(records):
+def _user_texts(records):
     for rec in records:
         fr = _frame(rec) if isinstance(rec, dict) else None
         if not (isinstance(fr, dict) and fr.get("type") == "response.create"):
@@ -28,11 +28,11 @@ def session_name(records):
             if isinstance(item, dict) and item.get("role") == "user":
                 for b in item.get("content") or []:
                     if isinstance(b, dict) and b.get("type") in ("input_text", "text"):
-                        t = " ".join((b.get("text") or "").split())
-                        if t:
-                            return t[:_NAME_MAX] + ("…" if len(t) > _NAME_MAX else "")
-        return None
-    return None
+                        yield b.get("text") or ""
+
+
+def session_name(records):
+    return naming.human_label(_user_texts(records))
 
 
 THINKING_R = 1.0
