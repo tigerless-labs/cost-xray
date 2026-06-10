@@ -45,7 +45,7 @@ if [ -z "$UV" ]; then
 fi
 [ -n "$UV" ] || { echo "uv install failed -- see https://astral.sh/uv" >&2; exit 1; }
 
-"$UV" venv --python 3.12 .venv
+[ -d .venv ] || "$UV" venv --python 3.12 .venv
 "$UV" pip install --python .venv/bin/python -q -r requirements.txt
 "$UV" pip install --python .venv/bin/python -q -e '.[tui]' 2>/dev/null \
   || "$UV" pip install --python .venv/bin/python -q -e . 2>/dev/null || true
