@@ -55,9 +55,14 @@ wire `usage`** — pin what tiktoken mis-sizes, proportion the rest:
 - **everything else** — tiktoken scaled so the calibrated total = wire usage − pins.
 
 Calibrated total = wire usage (**bill is exact**); the only approximation is the split between
-sibling events. Exact pins are gated on `count_tokens` auth (API key or the Claude Code OAuth login
-via `claude_login.py`) and **fail-open** — no auth ⇒ zero network calls, identical output, less
+sibling events — sizing every event via `count_tokens` would add per-event API load and rate-limit
+exposure, so the default calibrates instead and the residuals are benchmarked continuously. Exact
+pins are gated on `count_tokens` auth (API key or the Claude Code OAuth login via
+`claude_login.py`) and **fail-open** — no auth ⇒ zero network calls, identical output, less
 precise. Why pin, and the accuracy board: [../architecture.md](../architecture.md).
+
+**Planned:** an opt-in exact mode — every event sized by full `count_tokens` differencing —
+manually enabled for precision-critical use.
 
 ## Pricing
 
