@@ -496,6 +496,20 @@ def test_session_name_is_first_human_user_message():
     assert adapters.session_name(codex, agent="codex") == "hello codex"
 
 
+def test_codex_session_name_skips_startup_probe_and_injected_wrappers():
+    from cost_xray import adapters
+    probe = {"frame": {"type": "response.create", "input": []}}
+    real = {"frame": {"type": "response.create", "input": [
+        {"type": "message", "role": "developer", "content": [
+            {"type": "input_text", "text": "<permissions instructions>sandboxing</permissions instructions>"}]},
+        {"type": "message", "role": "user", "content": [
+            {"type": "input_text", "text": "<environment_context>\n  <cwd>/home/u/proj</cwd>\n</environment_context>"}]},
+        {"type": "message", "role": "user", "content": [
+            {"type": "input_text", "text": "ok"}]}]}}
+    assert adapters.session_name([probe, real], agent="codex") == "ok"
+    assert adapters.session_name([probe], agent="codex") is None
+
+
 def test_project_name_anchored_to_env_block_not_conversation():
     from cost_xray import adapters
     env = ("# Environment\nYou have been invoked in the following environment: \n"

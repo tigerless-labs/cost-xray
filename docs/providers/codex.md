@@ -72,6 +72,8 @@ applied to Codex's usage split. There is no cache-write premium on this wire.
 ## Quirks
 
 - Raw is frames, not turns — anything that assumes record-per-turn will mis-handle Codex.
+- The stream may open with an empty-input create (a startup probe), and the first real user item
+  arrives after injected developer / environment wrappers — session naming scans past both.
 - Builtins may lack a tool name; they fall back to their type as the leaf.
 - Reasoning items are empty on the wire (encrypted plaintext); rely on the reasoning-token count, not
   item text, for output thinking — see [../architecture.md](../architecture.md).
