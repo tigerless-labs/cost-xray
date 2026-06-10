@@ -86,9 +86,11 @@ What is taking space in the context window right now — system prompt, every to
 
 Configured servers and tools that are injected into every request's prefix but never actually called. They pay their tool-schema overhead on every turn — cost-xray flags the dead weight.
 
-### Exact tokenization
+### Tokenization accuracy
 
-When you're logged into Claude Code (or have an API key), cost-xray sizes the hard-to-estimate parts — thinking and tool schemas — with Anthropic's own `count_tokens`, the only exact Claude tokenizer (no open-source one exists). Offline, it falls back to a calibrated estimate. Either way, totals reconcile to the provider's own `usage`.
+Claude's tokenizer is private — no official or open-source tokenizer exists — and calling Anthropic's `count_tokens` API for everything would add load and hit its limits. So for Claude, cost-xray uses an estimator plus proportional calibration: tiktoken sizes each part, the parts it mis-sizes most (thinking, tool schemas) get targeted corrections — pinned with `count_tokens` when you're logged in, a fixed ratio otherwise — and the rest is scaled so the calibrated total matches the provider's own `usage`. The total, and therefore the bill, is exact; only the split *between* sources in the same request is approximate. We benchmark those residuals continuously ([CONTRIBUTING.md](CONTRIBUTING.md)) and they're small enough for attribution work.
+
+**Coming soon:** an opt-in exact mode — every part sized by full `count_tokens` differencing — manually enabled, for users who need maximum per-source precision.
 
 ### Self-healing capture
 
