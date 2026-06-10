@@ -1,11 +1,3 @@
-"""Drill-down + lazy content fetch for the TUI (design.md §4, *lazy content fetch*).
-
-Reads the materialized `derived.jsonl` (per-event `tokens` + `ref`) for the breakdown,
-and reaches into `raw.jsonl` (the truth) only on demand to pull the actual text a `ref`
-points at — so a panel row can expand to per-tool → per-call → the real output without
-ever pre-loading raw. Framework-agnostic and testable; the Textual layer just renders
-what these return.
-"""
 from __future__ import annotations
 
 import json
@@ -37,9 +29,6 @@ def _derived_one(session_dir):
 
 
 def bucket_breakdown(session_dirs, zone, section, bucket):
-    """Per-tool/skill totals inside one (zone, section, bucket) cell, fattest first.
-    `session_dirs` is one dir or a list (agent aggregate — sums across sessions).
-    Expands e.g. `tool_result` → Read / Bash / Grep. Returns [{label, tokens, n}]."""
     agg = defaultdict(lambda: {"tokens": 0, "n": 0})
     for d in _norm(session_dirs):
         for turn in _derived_one(d):
@@ -54,10 +43,6 @@ def bucket_breakdown(session_dirs, zone, section, bucket):
 
 
 def tool_calls(session_dirs, zone, section, bucket, tool=None):
-    """Individual events (calls / blocks) in a cell, fattest first. With `tool`, only that
-    tool's events; with `tool=None`, **every** event of the bucket — used to drill the
-    tool-less buckets (thinking / text / system) straight to per-turn. Each row carries its
-    `dir` so `fetch_content` knows where to read. Returns [{turn, tokens, ref, id, dir}]."""
     out = []
     for d in _norm(session_dirs):
         for turn in _derived_one(d):
@@ -73,10 +58,6 @@ def tool_calls(session_dirs, zone, section, bucket, tool=None):
     return out
 
 
-# Cost drill reads the **pre-aggregated** `summary.by_cat_tool` (category → leaf, cumulative),
-# NOT `derived` — so server→tool is O(categories), not a full derived re-scan. Only the per-turn
-# level (`cat_calls`) still reads `derived`. by_cat_tool keys are "group|label|leaf" (leaf =
-# skill name, else tool, else —); server is derived from the leaf (mcp__<srv>__ prefix).
 _SUM_FIELDS = ("cached_usd", "rewrote_usd", "fresh_usd", "output_usd")
 
 
@@ -91,9 +72,6 @@ def _summary_one(session_dir):
 
 
 def _cat_tool_rows(session_dirs, group, label, *, server=None, by_server=False):
-    """Aggregate `summary.by_cat_tool` for one category into per-server (`by_server=True`) or
-    per-leaf rows, optionally filtered to one MCP `server`. Carries the cache-$ split so a
-    server/tool row shows 读/写/新 like its parent. Fattest $ first."""
     agg = defaultdict(lambda: {"tokens": 0.0, "usd": 0.0, **{k: 0.0 for k in _SUM_FIELDS}})
     for d in _norm(session_dirs):
         for k, v in _summary_one(d).get("by_cat_tool", {}).items():
@@ -117,21 +95,14 @@ def _cat_tool_rows(session_dirs, group, label, *, server=None, by_server=False):
 
 
 def cat_servers(session_dirs, group, label):
-    """Per-MCP-**server** within a category (from `summary`) — the level above per-tool for MCP
-    buckets, so an MCP category drills server → tool → call. `[{label=server, tokens, usd, *_usd}]`."""
     return _cat_tool_rows(session_dirs, group, label, by_server=True)
 
 
 def cat_breakdown(session_dirs, group, label, server=None):
-    """Per-tool/skill within a `/context` category `(group, label)` (from `summary`) — for drilling
-    a **cost** row (e.g. `("Messages","system tool use+output") → Bash / Read / …`). With `server`,
-    only that MCP server's tools. `[{label, tokens, usd, *_usd}]`, fattest $ first."""
     return _cat_tool_rows(session_dirs, group, label, server=server)
 
 
 def cat_calls(session_dirs, group, label, tool=None):
-    """Individual events (turn occurrences) within a category, optionally one tool. Each carries
-    its `dir` for `fetch_content`. Returns `[{turn, tokens, usd, ref, dir}]`, fattest $ first."""
     out = []
     for d in _norm(session_dirs):
         for turn in _derived_one(d):
@@ -146,18 +117,11 @@ def cat_calls(session_dirs, group, label, tool=None):
     return out
 
 
-# --- context drill: same server→tool→call levels, but over ONE turn's in-memory events ------
-# The cost table drills the cumulative `derived.jsonl`; the context table is a single-turn
-# **window snapshot** (the latest derived line, already in memory), so these take an `events`
-# list instead of reading disk — same shape as `cat_*`, tokens-only (no $). Keeps the two
-# tables' drill identical while the context one never re-reads a file.
-
 def _in_cat(events, group, label):
     return [e for e in events if _category(e) == (group, label)]
 
 
 def ctx_servers(events, group, label):
-    """Per-MCP-server within a category, for one turn's events. `[{label=server, tokens, n}]`."""
     agg = defaultdict(lambda: {"tokens": 0, "n": 0})
     for e in _in_cat(events, group, label):
         srv = _mcp_server(e.get("tool")) or "—"
@@ -169,8 +133,6 @@ def ctx_servers(events, group, label):
 
 
 def ctx_breakdown(events, group, label, server=None):
-    """Per-tool/skill within a category, for one turn's events (optional MCP-server filter).
-    Skill name first (so Skills drills to skill names). `[{label, tokens, n}]`."""
     agg = defaultdict(lambda: {"tokens": 0, "n": 0})
     for e in _in_cat(events, group, label):
         if server is not None and _mcp_server(e.get("tool")) != server:
@@ -184,8 +146,6 @@ def ctx_breakdown(events, group, label, server=None):
 
 
 def ctx_calls(events, group, label, tool=None):
-    """Individual blocks within a category for one turn, each with its `ref` for `fetch_content`.
-    `[{tokens, ref, id}]`, fattest first."""
     out = []
     for e in _in_cat(events, group, label):
         if tool is not None and (e.get("skill") or e.get("tool") or "—") != tool:
@@ -196,15 +156,10 @@ def ctx_calls(events, group, label, tool=None):
 
 
 def fetch_content(session_dir, ref):
-    """Lazily fetch the real text a `ref` points at, from `raw.jsonl`. `ref` is the
-    adapter-native locator: `{turn,msg[,block]}` / `{turn,out}` / `{turn,field[,i]}`. The
-    raw-shape-specific lookup lives in the adapter (`adapters.locate`); this layer only reads
-    `raw`, dispatches by agent (the session dir's parent), and renders the text. Returns ''
-    if unresolvable."""
     if not isinstance(ref, dict):
         return ""
     d = pathlib.Path(session_dir)
-    records = list(raw_codec.iter_records(d))           # streams + reconstructs deltas (legacy passes through)
+    records = list(raw_codec.iter_records(d))
     return _block_text(adapters.locate(records, ref, agent=d.parent.name))
 
 

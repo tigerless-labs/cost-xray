@@ -1,11 +1,3 @@
-"""Verification board — **shared machinery** (docs/design/verification.md).
-
-Agent-neutral core only: the residual math, the `ref → coord` mapping, the cross-turn
-aggregation/render, and the canonical bucket table + auto-add tripwire. Per-agent behaviour
-(coverage on a real wire shape, accuracy against an exact tokenizer) lives in
-`test_verify_<agent>.py`, because *every test is per-agent* — these are the pieces that genuinely
-have no agent.
-"""
 from __future__ import annotations
 
 import pytest

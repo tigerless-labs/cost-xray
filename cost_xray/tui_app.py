@@ -1,21 +1,3 @@
-"""Interactive cost-xray TUI (Textual) — mouse + keyboard.
-
-- **Home**: agent → project → session in the **same `DrillTable` as Detail** — one Rich table, so
-  the turns / hit / tokens / $ columns stay aligned however many groups are expanded (indent only
-  moves the source column). Agent & project rows are **totals-only headers** — aggregate basics
-  summed from the already-materialized per-session `summary.json`, not drillable. (A merged
-  all-sessions Detail would have to re-read + regroup every session's `derived.jsonl` at once → large
-  latency, so we don't offer it.) A session **leaf** posts `Picked` → its Detail.
-- **Detail**: two codeburn-style bordered tables — **cost** (cumulative $ by the `/context`
-  categories) and **context** (this turn's window occupancy). Both are **drillable**: ⏎ on a row
-  → MCP server → tool → per-turn/block → the real output (fetched from `raw` on demand). Drilling
-  uses real table columns, so the $ columns stay aligned at any depth (indent only goes in the
-  `source` column; numeric columns are fixed-width, right-justified). `esc`/`s` → back.
-
-Server/tool come from the pre-aggregated `summary.by_cat_tool` (fast); only the per-turn level
-reads `derived`. Data layer reused (`tui` + `drill` + the materialized `summary.json`); this is
-just the Textual shell. `pip install -e '.[tui]'` · `python -m cost_xray.tui_app`
-"""
 from __future__ import annotations
 
 import os
@@ -35,35 +17,29 @@ from textual.widgets import Footer, Header, Static
 from cost_xray import drill, tui
 from cost_xray import events as ev
 
-_DRILL_LIMIT = 50                                    # cap per-occurrence leaves (avoid 10k+ rows)
-_CHROME_ROWS = 2                                     # panel top border + table header above row 0
-_WHEEL = 3                                           # rows the cursor moves per wheel notch
+_DRILL_LIMIT = 50
+_CHROME_ROWS = 2
+_WHEEL = 3
 
-
-# --- drillable bordered table (one Rich Table → columns align at any depth) -----------
 
 class Node:
-    """One row in the drill tree. `cols` are pre-formatted numeric cells (1:1 with the headers);
-    `loader` lazily builds children on first expand."""
-    __slots__ = ("label", "cols", "data", "expandable", "loader", "children", "expanded", "bold")
+    __slots__ = ("label", "cols", "data", "expandable", "loader", "children", "expanded", "bold",
+                 "style")
 
     def __init__(self, label, cols, *, data=None, loader=None, bold=False,
-                 children=None, expanded=False):
+                 children=None, expanded=False, style=None):
         self.label = label
         self.cols = cols
         self.data = data or {}
         self.loader = loader
         self.expandable = loader is not None or children is not None
-        self.children = children        # None = not yet loaded (lazy) or no children (leaf)
+        self.children = children
         self.expanded = expanded
         self.bold = bold
+        self.style = style
 
 
 class DrillTable(Widget):
-    """Bordered table + indented expandable rows. Numeric columns are fixed-width / right-justified,
-    so they stay aligned no matter how deep you drill (indent only touches the `source` column).
-    Mouse + keyboard: ↑↓ / wheel move, ⏎ or a click drills the row (a parent expands, a re-click
-    collapses; a leaf posts Picked so the screen can fetch its real content)."""
 
     can_focus = True
     BINDINGS = [
@@ -86,13 +62,13 @@ class DrillTable(Widget):
     def __init__(self, title, columns, border, **kw):
         super().__init__(**kw)
         self.title = title
-        self.columns = columns          # [(header, justify, width)]; columns[0] is the source column
+        self.columns = columns
         self.border = border
         self.roots: list[Node] = []
-        self.footer = None              # totals row (not selectable)
+        self.footer = None
         self.cursor = 0
-        self._offset = 0                # first visible row — follows the cursor (internal scroll)
-        self._page = 1                  # body rows that fit (set in render from the widget height)
+        self._offset = 0
+        self._page = 1
 
     def set_roots(self, roots):
         self.roots = roots
@@ -114,10 +90,9 @@ class DrillTable(Widget):
         total = len(vis)
         if total:
             self.cursor = max(0, min(total - 1, self.cursor))
-        # body rows that fit = widget height − panel borders(2) − header(1) − footer(1)
         page = max(1, (self.size.height or 24) - 3 - (1 if self.footer else 0))
         self._page = page
-        off = self._offset                          # scroll so the cursor stays on screen
+        off = self._offset
         if self.cursor < off:
             off = self.cursor
         elif self.cursor >= off + page:
@@ -132,12 +107,12 @@ class DrillTable(Widget):
         for i in range(off, min(off + page, total)):
             n, depth = vis[i]
             arrow = "▾ " if (n.expandable and n.expanded) else ("▸ " if n.expandable else "  ")
-            name = Text("  " * depth + arrow + n.label, style="bold" if n.bold else "")
+            name = Text("  " * depth + arrow + n.label,
+                        style=n.style or ("bold" if n.bold else ""))
             style = "reverse" if (i == self.cursor and self.has_focus) else None
             t.add_row(name, *n.cols, style=style)
         if self.footer:
             t.add_row(*self.footer, style="bold")
-        # scroll hint: ▲/▼ when clipped, plus the visible window / total
         lo, hi = (off + 1 if total else 0), min(off + page, total)
         up, down = ("▲" if off > 0 else " "), ("▼" if off + page < total else " ")
         sub = f"{up} {lo}-{hi}/{total} {down} · ↑↓ ⏎"
@@ -191,13 +166,13 @@ class DrillTable(Widget):
 
     def on_click(self, event):
         self.focus()
-        row = event.y - _CHROME_ROWS                 # body starts below the border + header
-        if not (0 <= row < self._page):              # a click on the chrome / footer drills nothing
+        row = event.y - _CHROME_ROWS
+        if not (0 <= row < self._page):
             return
         i = self._offset + row
         if i < len(self._visible()):
             self.cursor = i
-            self._activate(toggle=True)              # a click toggles a parent; ⏎ only expands
+            self._activate(toggle=True)
 
     def on_mouse_scroll_down(self, event):
         event.stop()
@@ -208,25 +183,17 @@ class DrillTable(Widget):
         self._move(-_WHEEL)
 
 
-# --- Home: agent → project → session, in the same DrillTable as Detail ---------------
-
-_MIN_BILL = 0.005       # hide sessions costing less than this (rounds to $0.00 — e.g. quota probes)
+_MIN_BILL = 0.005
 _HOME_COLS = [("agent · project · session", "left", 40), ("turns", "right", 6),
               ("hit", "right", 5), ("tokens", "right", 8), ("cost", "right", 9)]
 
 
 def _home_cols(nt, cached, ci, tokens, bill):
-    """The four numeric cells shared by every Home row (agent/project/session) — same count and
-    order at every depth, so they slot into the same fixed-width columns and stay aligned."""
     hit = (cached / ci) if ci else 0.0
     return [f"{int(nt)}", f"{100*hit:.0f}%", tui._h(int(tokens)), f"${bill:.2f}"]
 
 
 class HomeScreen(Screen):
-    """agent → **project** → session, rendered in the **same `DrillTable` as Detail** — one Rich
-    table, indent only on the source column, so the numeric columns stay aligned however many groups
-    are expanded. Agents expand by default, projects collapse; a session **leaf** posts `Picked` →
-    Detail. `unknown`-agent and $0 sessions are hidden; agent/project rows are totals-only."""
     BINDINGS = [Binding("q", "app.quit", "quit")]
 
     def compose(self) -> ComposeResult:
@@ -236,23 +203,19 @@ class HomeScreen(Screen):
 
     def on_mount(self) -> None:
         self._table = self.query_one("#home", DrillTable)
-        self._dirs = {}                                  # sid → (dir, agent)
+        self._dirs = {}
         self._sess_nodes, self._proj_nodes, self._agent_nodes = {}, {}, {}
-        self._proj_sids = defaultdict(list)              # (agent, project) → [sid], mtime order
-        self._agent_sids = defaultdict(list)             # agent → [sid]
+        self._proj_sids = defaultdict(list)
+        self._agent_sids = defaultdict(list)
         self._names = {}
-        self._expanded = {}                              # agent / pkey → open?, kept across live re-sorts
+        self._expanded = {}
         rolls, agents = self._collect()
         self._sync(rolls, agents)
         if self._dirs:
             self._table.focus()
-            self.set_interval(2.0, self._load)           # live: re-sort + bills follow the materializer
+            self.set_interval(2.0, self._load)
 
     def _collect(self):
-        """Read every agent's **rollup** (one read/agent) and group + sort its sessions
-        newest-active-first, projects/agents by newest activity, **`(no project)` last**. `unknown` +
-        $0 sessions hidden. Pure reads (no widget/state mutation) so the poll worker runs it off the
-        main thread. Returns `(rolls, agents)`."""
         rolls, agents = [], []
         if tui.ROOT.exists():
             for ad in sorted(tui.ROOT.iterdir()):
@@ -262,23 +225,20 @@ class HomeScreen(Screen):
                 rolls.append((ad.name, roll))
                 groups = defaultdict(list)
                 for sid, b in (roll.get("sessions") or {}).items():
-                    if b.get("bill", 0.0) < _MIN_BILL:   # $0 / 0-turn → hide (rounds to $0.00)
+                    if b.get("bill", 0.0) < _MIN_BILL:
                         continue
                     d = ad / sid
-                    tui._ensure_fresh(d)                 # keep live capture flowing (stat-only kick)
+                    tui._ensure_fresh(d)
                     groups[b.get("project") or "—"].append((b.get("mtime", 0.0), sid, d, b))
                 if groups:
                     for g in groups.values():
                         g.sort(key=lambda r: -r[0])
                     agents.append((ad.name, max(g[0][0] for g in groups.values()), groups))
-        agents.sort(key=lambda a: -a[1])                 # agent by most-recent activity
+        agents.sort(key=lambda a: -a[1])
         return rolls, agents
 
     def _sync(self, rolls, agents) -> None:
-        """(Re)build the agent→project→session tree in newest-active order — run on the main thread on
-        mount and on every poll. Carries each group's expand/collapse forward and keeps the cursor on
-        the same row as it moves; `_paint` then fills the live numbers."""
-        for agent, an in self._agent_nodes.items():      # snapshot the user's open/closed choices
+        for agent, an in self._agent_nodes.items():
             self._expanded[agent] = an.expanded
         for pkey, pn in self._proj_nodes.items():
             self._expanded[pkey] = pn.expanded
@@ -290,7 +250,6 @@ class HomeScreen(Screen):
         blank, roots = ["", "", "", ""], []
         for agent, _mt, groups in agents:
             pnodes = []
-            # real projects by newest session desc; `(no project)` ("—") always last
             for proj in sorted(groups, key=lambda p: (p == "—", -groups[p][0][0])):
                 pkey = (agent, proj)
                 snodes = []
@@ -318,7 +277,6 @@ class HomeScreen(Screen):
         self._paint(rolls)
 
     def _cursor_id(self):
-        """Identity `(kind, key)` of the row under the cursor, so a re-sort can re-find it."""
         vis = self._table._visible()
         if not vis or not (0 <= self._table.cursor < len(vis)):
             return None
@@ -350,13 +308,10 @@ class HomeScreen(Screen):
 
     @work(thread=True, exclusive=True)
     def _load(self) -> None:
-        rolls, agents = self._collect()                  # off-thread reads; the tree mutate is main-thread
+        rolls, agents = self._collect()
         self.app.call_from_thread(self._sync, rolls, agents)
 
     def _paint(self, rolls) -> None:
-        """Repaint every node's label + numeric cells from the per-agent rollup — session leaves from
-        `sessions`, project & agent groups from the **precomputed** `projects` / `totals` (no summing;
-        the materializer refreshed them on the last derived update). A footer pins the grand total."""
         gt = dict.fromkeys(("nt", "cached", "ci", "tokens", "bill"), 0.0)
         for agent, roll in rolls:
             for sid, b in (roll.get("sessions") or {}).items():
@@ -385,6 +340,13 @@ class HomeScreen(Screen):
                                         tot.get("tokens", 0), tot.get("bill", 0.0))
                 for k in gt:
                     gt[k] += tot.get(k, 0.0)
+            broken = roll.get("broken") or []
+            if anode is not None:
+                if broken:
+                    anode.label = f"{anode.label} · ⚠ {len(broken)} capture-broken"
+                    anode.style = "bold red"
+                else:
+                    anode.style = None
         self._table.footer = [Text("total", style="bold"),
                               *_home_cols(gt["nt"], gt["cached"], gt["ci"], gt["tokens"], gt["bill"])]
         self._table.refresh()
@@ -392,14 +354,11 @@ class HomeScreen(Screen):
     def on_drill_table_picked(self, message: DrillTable.Picked) -> None:
         data = message.node.data
         if not data or "dir" not in data:
-            return                              # agent/project rows are totals-only (no merged detail)
+            return
         nm = self._names.get(data["sid"])
         title = f"{nm} · {data['sid'][:8]}" if nm else data["sid"][:8]
         self.app.push_screen(DetailScreen([data["dir"]], data["agent"], title, show_context=True))
 
-
-
-# --- Detail: cost + context drill tables + content panel ---------------------------
 
 _COST_COLS = [("source", "left", 22), ("total$", "right", 9), ("read$", "right", 8),
               ("write$", "right", 8), ("new$", "right", 8), ("%bill", "right", 6)]
@@ -415,7 +374,7 @@ class DetailScreen(Screen):
         self.show_context = show_context and len(dirs) == 1
         self._bill = 0.0
         self._cost = DrillTable("cost · cumulative", _COST_COLS, "magenta", id="cost")
-        self._cost_nodes = {}            # group / (group,label) → Node
+        self._cost_nodes = {}
         self._cost_roots = []
         if self.show_context:
             self._ctx = DrillTable("context · this turn", _CTX_COLS, "blue", id="context")
@@ -446,7 +405,6 @@ class DetailScreen(Screen):
         self._cost.focus()
         self.set_interval(1.5, self._refresh)
 
-    # ---- cost table (cumulative summary) ----
     def _agg(self):
         agg = defaultdict(lambda: dict.fromkeys(
             ("usd", "cached_usd", "rewrote_usd", "fresh_usd", "output_usd"), 0.0))
@@ -467,16 +425,16 @@ class DetailScreen(Screen):
     def _split_cols(self, usd, cr, cw, nw):
         return [f"${usd:.2f}", f"${cr:.2f}", f"${cw:.2f}", f"${nw:.2f}", self._pct(usd)]
 
-    def _row_cols(self, r):              # server/tool row — full cache $ split (from summary)
+    def _row_cols(self, r):
         nw = r.get("fresh_usd", 0.0) + r.get("output_usd", 0.0)
         return self._split_cols(r["usd"], r.get("cached_usd", 0.0), r.get("rewrote_usd", 0.0), nw)
 
-    def _leaf_cols(self, usd):           # per-turn call row — total$ + %bill only (still aligned)
+    def _leaf_cols(self, usd):
         return [f"${usd:.2f}", "", "", "", self._pct(usd)]
 
     def _cat_loader(self, g, lbl):
         def load():
-            if lbl.startswith("MCP"):                         # MCP category → cluster by server first
+            if lbl.startswith("MCP"):
                 return [self._cost_server_node(g, lbl, r) for r in drill.cat_servers(self.dirs, g, lbl)]
             return [self._cost_tool_node(g, lbl, None, r) for r in drill.cat_breakdown(self.dirs, g, lbl)]
         return load
@@ -491,7 +449,7 @@ class DetailScreen(Screen):
                     loader=lambda: self._cost_call_nodes(g, lbl, r["label"]))
 
     def _cost_call_nodes(self, g, lbl, tool):
-        calls = drill.cat_calls(self.dirs, g, lbl, tool)      # per-turn level reads derived
+        calls = drill.cat_calls(self.dirs, g, lbl, tool)
         nodes = [Node(f"turn#{c['turn']}", self._leaf_cols(c["usd"]),
                       data={"ref": c["ref"], "dir": c["dir"]}) for c in calls[:_DRILL_LIMIT]]
         if len(calls) > _DRILL_LIMIT:
@@ -536,7 +494,6 @@ class DetailScreen(Screen):
                              f"${gt[2]:.2f}", f"${gt[3]:.2f}", "—"]
         self._cost.refresh()
 
-    # ---- context table (this turn's window snapshot; same server→tool→block drill) ----
     def _latest_input_events(self):
         line = tui._latest_derived(self.dirs[0]) or {}
         win = line.get("window") or 1

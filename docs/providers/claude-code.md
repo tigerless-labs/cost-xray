@@ -61,9 +61,10 @@ precise. Why pin, and the accuracy board: [../architecture.md](../architecture.m
 
 ## Pricing
 
-`cost.py` resolves per-model rates from a LiteLLM pricing snapshot (with a safe fallback table) and
-prices the calibrated usage split: fresh input, cache-read (discounted), cache-write — with the
-1-hour-TTL write Claude Code uses priced above the 5-minute write rate — and output.
+`cost.py` resolves per-model rates from the LiteLLM price map (a small override covers models
+LiteLLM doesn't list yet) and prices the calibrated usage split: fresh input, cache-read
+(discounted), cache-write — with the 1-hour-TTL write Claude Code uses priced above the 5-minute
+write rate — and output. Cache rates are LiteLLM's own per-model values.
 
 ## Quirks
 

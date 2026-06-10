@@ -1,18 +1,3 @@
-"""Live, end-to-end precision check against Anthropic's own `count_tokens` (design.md §6).
-
-One test: take the latest captured Claude request, split its Messages into **our** bucket
-classification by leave-one-out differencing (each bucket = A − count(messages without it),
-no proportional scaling) plus a `structure` row for the per-message framing every single
-removal leaves behind, add the exact static anchors (system + tools), and check the whole
-thing reconstructs the real consumed input (`usage`). That chain — our decomposition →
-real cost — is the precision demonstration.
-
-Network + credentials required, so it is **opt-in** — skipped unless `COST_XRAY_LIVE=1`
-AND real auth (OAuth login at `~/.claude/.credentials.json`, or an API key) AND a captured
-Claude session are present:
-
-    COST_XRAY_LIVE=1 pytest tests/test_live_count_tokens.py
-"""
 from __future__ import annotations
 
 import json
@@ -59,7 +44,6 @@ def _wire_input(usage):
 
 
 def test_our_bucket_split_reconstructs_real_usage():
-    """Our Messages buckets (leave-one-out, no scaling) + exact static anchors == real usage."""
     if count_tokens.auth_headers() is None:
         pytest.skip("no count_tokens auth (OAuth login or API key)")
     rec = _latest_claude_request()
@@ -80,15 +64,6 @@ def test_our_bucket_split_reconstructs_real_usage():
 
 
 def test_output_per_bucket_pinned_thinking_vs_differencing():
-    """The output axis, **mirroring the input method** (verification.md): the generated blocks are
-    differenced per bucket (`per_output_bucket_tokens`, leave-one-out, thinking/text/tool_io), then
-    our calibration **pins output `thinking` to that exact value** and tiktoken-proportions the rest
-    — exactly as the input pins thinking via `count_tokens` instead of `THINKING_R`. With thinking
-    pinned, `text` (and `tool_io`) should land close.
-
-    Hard pins: the conservation floor (calibrated output total == wire output) and `thinking`
-    residual ≈ 0 (it's pinned). `text`/`tool_io` get a real — but no longer thinking-contaminated —
-    accuracy gate."""
     if count_tokens.auth_headers() is None:
         pytest.skip("no count_tokens auth (OAuth login or API key)")
     rec = _latest_claude_request()

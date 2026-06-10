@@ -1,10 +1,3 @@
-"""Adapter + event-model tests (the Claude path).
-
-Verify the canonical Event shape, the positional path (zone/section/bucket), the
-tool_use↔tool_result join, mcp_server derivation, auto-appearing unknown buckets +
-tripwire, the structured skill-ad detector, and the Codex/OpenAI-Responses adapter
-(frame reassembly + decomposition). design.md §4 (event model) / §9 (per-agent adapter).
-"""
 from __future__ import annotations
 
 from cost_xray import detectors
@@ -237,7 +230,6 @@ def test_dispatch_by_agent_and_path():
     assert adapter_for(path="/responses") is openai
 
 
-
 def _codex_turn():
     return {
         "model": "gpt-5.5",
@@ -392,7 +384,6 @@ def test_codex_compaction_resets_reconstructed_history():
     assert turns[2]["new_input"] == [umsg("after compact")]
 
 
-
 def test_window_reads_the_anthropic_beta_header_not_the_model_name():
     rec = _record()
     rec["request_headers"] = {"anthropic-beta": "oauth-2025-04-20,context-1m-2025-08-07,effort"}
@@ -435,14 +426,11 @@ def test_window_and_usage_dispatch_by_agent():
     assert adapters.usage(rec, agent="claude")["cached"] == 1000
 
 
-
 def _refkey(e):
     return tuple(sorted((k, str(v)) for k, v in e["ref"].items()))
 
 
 def test_events_cover_every_wire_block_once():
-    """Count == system + tools + message blocks + output blocks (no skill ads here), and
-    every event has a distinct ref → no slot counted twice, none dropped."""
     rec = _record()
     evs = anthropic.to_events(rec)
     req = rec["request"]

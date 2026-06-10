@@ -85,7 +85,8 @@ The shared classification and pricing it calls never branch on agent:
 |---|---|
 | `events.py` | the canonical **Event** + the wire-type → bucket map; the classification taxonomy |
 | `classify.py` | `reconcile_turn` — calibrate tiktoken event sizes to the wire `usage` total, separate `thinking` first, cut the input axis at the cache boundary; then `rollup` |
-| `cost.py` | the $ axis — per-model rates (LiteLLM snapshot + fallback), fresh / cached / rewrote / output |
+| `cost.py` | the $ axis — per-model rates from the LiteLLM price map (small override for models it doesn't list yet), fresh / cached / rewrote / output |
+| `pricing_map.py` | loads the LiteLLM price map — daily-cached fetch of the upstream copy, bundled snapshot as the offline fallback |
 | `analyze.py` | tiktoken sizing (`ntok`) + window detection |
 | `count_tokens.py` | the **exact** Claude tokenizer via Anthropic's `count_tokens` endpoint (gated on auth, lazy, cached) |
 | `claude_login.py` | locate the Claude Code OAuth login so a Max/Pro user needs no API key |

@@ -112,3 +112,5 @@ Captured data under `~/.cost-xray/` is **kept** — `rm -rf ~/.cost-xray` to cle
   (zsh), `~/.bash_profile` (macOS bash). Using a different shell? Copy the `# >>> cost-xray >>>`
   block into its rc.
 - **change port / upstream** — edit `~/.cost-xray/env` (`PORT` / `CODEX_PORT` / `UPSTREAM`), then `cx restart`.
+- **upgrade** — re-run the install command; it restarts the capture services so the new code is
+  live immediately (a running service never picks up new code on its own).

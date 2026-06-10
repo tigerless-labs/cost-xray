@@ -1,9 +1,3 @@
-"""Reconciliation conservation laws (docs/local/testing.md).
-
-The wire `usage` is ground truth for TOTALS; our tiktoken event sizes are only
-PROPORTIONS. After calibration every roll-up must equal the wire EXACTLY — these tests
-pin that. The single approximation (sibling split) is exercised by the tolerance test.
-"""
 from __future__ import annotations
 
 import pytest

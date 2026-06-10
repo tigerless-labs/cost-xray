@@ -1,39 +1,7 @@
-"""mitmproxy addon: capture coding-agent LLM traffic + decompose the context.
-
-Reuses mitmproxy as the capture plumbing (reverse-proxy mode = no CA cert):
-
-    mitmdump --mode reverse:https://api.anthropic.com -p 8788 -s cost_xray/addon.py
-    ANTHROPIC_BASE_URL=http://127.0.0.1:8788 claude
-
-Capture approach adapted from llm-interceptor (MIT, https://github.com/chouzz/llm-interceptor):
-  - detect streaming via `content-type: text/event-stream`
-  - **buffer the response** (mitmproxy default) and parse the SSE body into
-    structured events — reliable, unlike teeing the live stream
-  - redact secrets in headers and body
-Buffering means the agent receives each complete response (it waits for the full
-message before acting anyway); mitmproxy handles the HTTP correctly so agentic
-tool loops are not broken.
-
-Capture is decoupled from analysis: this addon only records raw bytes (keeping the
-proxy hot path thin — no tokenization blocking request forwarding). Decomposition
-(`analyze.py`) runs in the TUI at read time, so analysis can improve without
-re-capturing, and old sessions get re-analyzed with the latest logic.
-
-Storage (layered like the SWE-bench `logs/run_evaluation/<run>/<agent>/<instance>/`
-tree) — keyed by the real agent + session id, so a long-running daemon keeps each
-coding session in its own directory:
-
-  ~/.cost-xray/sessions/<agent>/<session_id>/
-      meta.json     agent / model / first_seen / last_seen / n_turns
-      raw.jsonl     HTTP: one record per completed turn. Codex WebSocket: one frame per
-                    line, appended in realtime. Append-only; never rewritten.
-
-The session id comes straight from Claude Code's `X-Claude-Code-Session-Id`
-header (same UUID as ~/.claude/projects/.../<uuid>.jsonl), with fallbacks.
-"""
 from __future__ import annotations
 
 import json
+import logging
 import os
 import pathlib
 import queue
@@ -41,9 +9,9 @@ import subprocess
 import sys
 import threading
 
-try:                                  # package context (tests / `-m`)
+try:
     from cost_xray import raw_codec
-except ImportError:                   # mitmproxy loads addon.py by path → cost_xray/ is sys.path[0]
+except ImportError:
     import raw_codec
 
 OUT = pathlib.Path(os.path.expanduser("~/.cost-xray"))
@@ -52,6 +20,7 @@ SESSIONS.mkdir(parents=True, exist_ok=True)
 _WRITE_Q: queue.Queue = queue.Queue()
 _WORKER_STARTED = False
 _WORKER_LOCK = threading.Lock()
+_LOG = logging.getLogger("cost_xray.addon")
 
 MATCH = ("/v1/messages", "/responses", "/chat/completions")
 SECRET_HEADERS = {"authorization", "x-api-key", "anthropic-api-key", "openai-api-key",
@@ -60,7 +29,8 @@ SECRET_BODY_KEYS = ("api_key", "apikey", "authorization", "token", "secret", "pa
 
 
 def _matched(flow) -> bool:
-    return any(p in flow.request.path for p in MATCH)
+    path = flow.request.path
+    return any(p in path for p in MATCH) and "/count_tokens" not in path
 
 
 def _redact_headers(headers) -> dict:
@@ -88,7 +58,6 @@ def _agent_of(ua: str) -> str:
 
 
 def _agent_for(flow) -> str:
-    """Agent from User-Agent, with path/host fallback (Codex's UA is unreliable)."""
     a = _agent_of(flow.request.headers.get("user-agent", ""))
     if a != "unknown":
         return a
@@ -100,11 +69,6 @@ def _agent_for(flow) -> str:
 
 
 def _session_id(flow, body) -> str:
-    """Best-effort stable session id for grouping a coding session's turns.
-
-    Claude Code sends `X-Claude-Code-Session-Id` (== ~/.claude/projects/.../<uuid>.jsonl).
-    Fall back to the session_id embedded in metadata.user_id, then the connection id.
-    """
     h = flow.request.headers
     sid = h.get("x-claude-code-session-id") or h.get("x-session-id")
     if sid:
@@ -199,13 +163,6 @@ _CONSUMER_LOCK = threading.Lock()
 
 
 class _Materializer:
-    """Handle to the **one warm materializer** — a plain child process (`python -m
-    cost_xray.materialize_daemon --watch`), **never** a `multiprocessing` spawn: spawn re-imports the
-    proxy's mitmdump main module in the child and wedges it, so it silently never materializes. The
-    child imports the tokenizer **once** and stays warm; it blocks on its stdin for a wake byte and
-    exits at EOF when this proxy dies, so its lifetime is bound to capture. `send` wakes it for one
-    sweep; a dead child is relaunched on the next `send` (self-healing). The proxy never tokenizes
-    (invariant #1) — it only writes a byte."""
 
     def __init__(self) -> None:
         self._proc = None
@@ -231,14 +188,10 @@ _MATERIALIZER = _Materializer()
 
 
 def _ensure_consumer() -> _Materializer:
-    """The process-wide warm materializer handle (its child is launched lazily on the first signal)."""
     return _MATERIALIZER
 
 
 def _signal_materialize() -> None:
-    """Wake the warm materializer for one sweep — a cheap byte on its stdin (the proxy never
-    tokenizes). Fail-open: if signalling fails, capture is unaffected and the next turn (or the TUI's
-    freshness kick) re-materializes."""
     try:
         _ensure_consumer().send(1)
     except Exception:
@@ -250,12 +203,6 @@ _BLOCK_CTX: dict = {}
 
 
 def _write_http_record(d, record) -> None:
-    """Append one HTTP turn in deduped form via the raw codec (block store + delta record). A
-    per-dir seen-hash set, seeded once from the session's store, lets a long live session append only
-    each turn's new blocks — the hot path stays linear in body size and writes far less. A paired
-    per-dir keyframe ctx delta-encodes the message ref list across turns; lost on restart, so the next
-    turn just re-keyframes (always correct). Runs on the proxy's serialized response hook; the hash
-    work folds into the redaction this body already took."""
     key = str(d)
     seen = _BLOCK_SEEN.get(key)
     if seen is None:
@@ -279,19 +226,17 @@ def _writer_loop() -> None:
                 _update_meta_info(d, meta)
             elif kind == "kick":
                 _signal_materialize()
-        except Exception:
-            pass
+        except Exception as e:
+            _LOG.warning("background write failed for %r: %r", job[:2], e)
         finally:
             _WRITE_Q.task_done()
 
 
 def _drain_writes_for_tests() -> None:
-    """Wait for the background writer. Tests only; production never calls this."""
     _WRITE_Q.join()
 
 
 def _parse_sse(text: str) -> tuple[list, dict | None]:
-    """Parse an SSE body into structured events; return (events, usage)."""
     events, usage = [], {}
     for line in text.splitlines():
         line = line.strip()
@@ -363,10 +308,14 @@ def response(flow) -> None:
     }
     try:
         d = _session_dir(flow, body)
+    except Exception as e:
+        _LOG.warning("raw write failed (no session dir) for %s: %r", flow.request.path, e)
+        return
+    try:
         _write_http_record(d, record)
-        _enqueue(("kick",))                              # one HTTP response = one turn → materialize
-    except Exception:
-        pass
+        _enqueue(("kick",))
+    except Exception as e:
+        _LOG.warning("raw write failed for %s: %r", d, e)
 
 
 def _flow_meta(flow) -> dict:
@@ -400,12 +349,6 @@ def _ws_record(flow, message) -> tuple[dict, dict | None]:
 
 
 def websocket_message(flow) -> None:
-    """Append each Codex WebSocket frame as it arrives.
-
-    The hook does only cheap decoding/redaction and enqueues disk work. Tokenization and
-    materialization run in the background after `response.completed`, so streaming is not
-    blocked by analysis.
-    """
     if not _matched(flow):
         return
     ws = getattr(flow, "websocket", None)
@@ -424,18 +367,12 @@ def websocket_message(flow) -> None:
         if isinstance(obj, dict) and message.from_client and obj.get("type") == "response.create":
             _enqueue(("meta", d, _meta_info(flow, obj, rec["ts"])))
         if isinstance(obj, dict) and obj.get("type") == "response.completed":
-            _enqueue(("kick",))                          # Codex turn boundary → materialize (not per frame)
+            _enqueue(("kick",))
     except Exception:
         pass
 
 
 def websocket_end(flow) -> None:
-    """Codex's model call is `GET /responses` -> 101 -> a WebSocket carrying OpenAI-Responses
-    JSON-RPC frames (`response.create` = the API request; `response.*` = the streamed reply),
-    several turns over one socket. Normal capture happens per-frame in `websocket_message`
-    via the background writer. This close hook is only the fallback for flows that were not
-    marked realtime. The read-time adapter splits frames back into turns; the `response.create`
-    frames hold instructions/tools/input."""
     if not _matched(flow):
         return
     if _flow_meta(flow).get("cost_xray_realtime_ws"):
@@ -458,6 +395,6 @@ def websocket_end(flow) -> None:
             obj, ts = last_create
             _update_meta(d, flow, obj, ts)
         if d is not None:
-            _enqueue(("kick",))                          # fallback close → materialize the socket's turns
-    except Exception:
-        pass
+            _enqueue(("kick",))
+    except Exception as e:
+        _LOG.warning("raw write failed (ws close) for %s: %r", flow.request.path, e)

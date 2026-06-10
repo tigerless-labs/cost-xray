@@ -1,10 +1,3 @@
-"""Data + formatting layer for the TUI (the interactive app is `tui_app.py`).
-
-Session discovery, the materialized-`summary` reader (with a non-blocking background-materialize
-kick), the latest-`derived`-line reader, and the small render helpers (`_h` / `_bar` / `_ROW` /
-`_split`). The Textual app in `tui_app.py` imports these; **this module renders nothing itself**
-— there is exactly one TUI (`tui_app`).
-"""
 from __future__ import annotations
 
 import json
@@ -25,7 +18,6 @@ _ROW = {"system": "System prompt", "schema": "Tool schemas", "text": "text",
         "thinking": "thinking", "tool_use": "tool_use", "tool_result": "tool_result"}
 
 
-
 def _h(n: int) -> str:
     if n >= 1_000_000:
         return f"{n/1_000_000:.1f}M"
@@ -39,9 +31,7 @@ def _bar(frac: float, width: int = 28, color: str = "white") -> Text:
     return Text("█" * filled + "·" * (width - filled), style=color)
 
 
-
 def _sessions() -> list[dict]:
-    """Return all sessions, newest activity first."""
     out = []
     if not ROOT.exists():
         return out
@@ -70,8 +60,6 @@ def _sessions() -> list[dict]:
 
 
 def _latest_request(d: pathlib.Path):
-    """Raw request body of the last completed turn (legacy analyze path) — via the raw codec, so a
-    deduped delta record is reconstructed and a legacy whole-body record passes through."""
     try:
         rec = raw_codec.latest_record(d)
         if rec:
@@ -82,8 +70,6 @@ def _latest_request(d: pathlib.Path):
 
 
 def _report_for(d: pathlib.Path) -> dict | None:
-    """Legacy single-request decomposition (analyze()). Kept for the read-time path and
-    its tests; the live panels use the event pipeline below."""
     req = _latest_request(d)
     if req is not None:
         try:
@@ -99,7 +85,6 @@ def _report_for(d: pathlib.Path) -> dict | None:
     return None
 
 
-
 _SUMMARY_CACHE: dict = {}
 _MAT_THREADS: dict = {}
 
@@ -112,10 +97,6 @@ def _safe_materialize(d: pathlib.Path) -> None:
 
 
 def _ensure_fresh(d: pathlib.Path) -> None:
-    """Kick a background materialize (in THIS process — the TUI worker, NEVER the proxy;
-    invariant #1) when raw.jsonl is newer than summary.json. Deduped per dir, non-blocking —
-    the render loop never waits on tokenization. The materializer is incremental, so once warm
-    this is ~instant."""
     raw, sp = d / "raw.jsonl", d / "summary.json"
     if not raw.exists():
         return
@@ -139,10 +120,6 @@ _ROLLUP_CACHE: dict = {}
 
 
 def _rollup(agent_dir: pathlib.Path):
-    """The per-agent **basic rollup** (`<agent>/_rollup.json`) — one read gives every session's
-    basics (project / name / bill / tokens / hit inputs), so Home builds its agent→project→session
-    tree without opening N summaries. Regenerable: rebuilt when missing/stale or when a session dir
-    isn't yet indexed. The materializer keeps live entries fresh on each run. Cached by file mtime."""
     from cost_xray.materialize import rebuild_rollup
     rp = agent_dir / "_rollup.json"
     have = {x.name for x in agent_dir.iterdir()
@@ -168,9 +145,6 @@ def _rollup(agent_dir: pathlib.Path):
 
 
 def _summary(d: pathlib.Path):
-    """Read the materialized summary.json — **never materializes in the render path**. If
-    raw.jsonl is newer, a background worker is kicked so the NEXT read is fresh; the render
-    itself only reads already-computed numbers. Cached by summary.json mtime."""
     _ensure_fresh(d)
     sp = d / "summary.json"
     if not sp.exists():
@@ -191,9 +165,6 @@ def _summary(d: pathlib.Path):
 
 
 def _latest_derived(d: pathlib.Path):
-    """The latest derived turn line (this turn's **already-calibrated** context) — read, not
-    computed. Returns {turn, window, usage, events:[...]} or None. Tail-reads the file so it
-    stays cheap on a large derived."""
     p = d / "derived.jsonl"
     if not p.exists():
         return None

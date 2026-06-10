@@ -66,8 +66,8 @@ Anthropic:
 
 ## Pricing
 
-Same shared `cost.py` rate path as Claude Code — per-model rates from the LiteLLM snapshot — applied
-to Codex's usage split. There is no cache-write premium on this wire.
+Same shared `cost.py` rate path as Claude Code — per-model rates from the LiteLLM price map —
+applied to Codex's usage split. There is no cache-write premium on this wire.
 
 ## Quirks
 

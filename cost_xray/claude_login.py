@@ -1,19 +1,3 @@
-"""Locate the Claude Code OAuth login — the same credential Claude Code itself uses for
-`/context`, so a Max/Pro user needs no API key. The proxy redacts the captured request's auth
-(invariant 2), so the read layer must re-source the login from the user's own config.
-
-Resolution is config-dir-aware and backend-agnostic, so it works for any logged-in user on any
-machine:
-  - config dir from `CLAUDE_CONFIG_DIR`, else `~/.claude`;
-  - the `claudeAiOauth` blob from `<config>/.credentials.json` (Linux/Windows);
-  - on macOS, where Claude Code keeps the login in the login Keychain, the same JSON shape from
-    the `Claude Code-credentials` generic-password item.
-
-Everything is **fail-open**: a missing/malformed login yields `None` and the caller silently
-stays on tiktoken. The one loud case is an **expired** login (`expiresAt`, ms epoch, validated
-against an injectable clock with a small skew): the stale token is withheld and a single clear
-notice is emitted so the user can re-authenticate instead of silently losing exact mode.
-"""
 from __future__ import annotations
 
 import json
@@ -78,9 +62,6 @@ def _warn_expired():
 
 
 def access_token(now: float | None = None):
-    """The usable Claude Code OAuth access token, or `None` if there is no login, it is
-    malformed, or it has expired. `now` (ms epoch) is injectable for deterministic expiry
-    checks; it defaults to the wall clock."""
     blob = _blob_from_file() or _blob_from_keychain()
     if not blob:
         return None

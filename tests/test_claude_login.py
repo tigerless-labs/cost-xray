@@ -1,6 +1,3 @@
-"""Claude Code login locator (claude_login.py): config-dir resolution, the file→keychain
-backend fallback, expiry validation against an injected clock, and fail-open on anything
-malformed. No network, no real Keychain — the keychain reader is injected."""
 from __future__ import annotations
 
 import json

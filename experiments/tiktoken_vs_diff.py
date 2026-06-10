@@ -1,14 +1,3 @@
-"""Experiment: tiktoken (local, free) vs count_tokens differencing (exact ground truth),
-per source and per bucket — to quantify *where* tiktoken is accurate and where it isn't.
-
-This is the evidence behind the production decision (design.md §6): the only place tiktoken
-is badly wrong is the thinking bucket (base64 signatures it over-counts ~3×). Everything
-static (system + tool schemas) and the normal message buckets (text / tool I/O) tokenize
-within a couple percent — so production can stay on tiktoken + wire `usage`, and reach for
-count_tokens only for the thinking bucket.
-
-    COST_XRAY_LIVE=1 python experiments/tiktoken_vs_diff.py   # needs OAuth/key + network
-"""
 from __future__ import annotations
 
 import glob

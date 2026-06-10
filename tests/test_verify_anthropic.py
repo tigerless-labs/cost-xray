@@ -1,12 +1,3 @@
-"""Verification board — **Claude** (docs/design/verification.md).
-
-Claude is tiktoken-*approximate* (o200k isn't its tokenizer), so its accuracy ground truth is
-Anthropic's `count_tokens` differencing — **live only**. Here we pin everything that's exercisable
-offline on the Claude wire shape: completeness (`coverage` over `adapters.anthropic.raw_units`),
-the output per-block differencing math (`count_tokens.per_output_event_tokens`, `_http` mocked),
-and the `bench_turn` wiring with mocked count_tokens truths. The real accuracy *numbers* are the
-opt-in live test + `experiments/benchmark.py`.
-"""
 from __future__ import annotations
 
 import pytest
@@ -52,8 +43,6 @@ def test_coverage_complete_turn_is_ok():
 
 
 def test_coverage_flags_a_structurally_dropped_block():
-    """A non-dict message block is silently dropped by the adapter — the structural pass must
-    surface it as `missing` (the real leak risk in `_block_events`)."""
     rec = _record()
     rec["request"]["messages"][0]["content"] = [{"type": "text", "text": "hi"}, 12345]
     cov = verify.coverage(rec, anthropic)
@@ -62,7 +51,6 @@ def test_coverage_flags_a_structurally_dropped_block():
 
 
 def test_coverage_token_guard_catches_a_missing_event():
-    """Even if the structural pass were fooled, the independent token recount catches a drop."""
     rec = _record()
     events = anthropic.to_events(rec)
     kept = [e for e in events if e.get("type") != "tool_result"]

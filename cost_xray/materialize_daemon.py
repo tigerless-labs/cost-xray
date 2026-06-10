@@ -1,32 +1,21 @@
-"""Materializer — turns captured raw into derived/summary for every stale session.
-
-Runs as a **warm long-lived consumer** the capture proxy starts once and signals per turn (`watch`),
-never in the proxy itself (invariant #1) and never gated on the TUI. The consumer **blocks** on the
-signal channel, so an idle store costs nothing; it pays the tokenizer import **once** (not per turn);
-it coalesces a burst of signals into one sweep; and it exits at EOF when the proxy dies. Discovery is
-by disk walk, so a never-opened session is still materialized, and a turn in any session catches up
-sessions missed during downtime. See docs/design/read-layer.md, ops.md.
-
-`sweep_once` is one pass (materialize every stale session). `watch` is the warm loop (wake bytes on
-stdin). `main` is the CLI: a one-shot sweep, or `--watch` to run the warm loop. Per-session locking
-lives in `materialize_session`, so concurrent sweeps are safe.
-"""
 from __future__ import annotations
 
 import argparse
+import json
+import logging
 import os
 import pathlib
 import select
 import sys
 
-from cost_xray.materialize import materialize_session
+from cost_xray.materialize import materialize_session, set_rollup_broken
 
 ROOT = pathlib.Path(os.path.expanduser("~/.cost-xray/sessions"))
+_LOG = logging.getLogger("cost_xray.materialize_daemon")
+_BROKEN_STATE: dict = {}
 
 
 def stale_sessions(root=ROOT):
-    """Session dirs whose raw is newer than their summary (or have none) — the ones needing
-    (re)materialize. Discovery is by disk walk, so a session that was never opened is found."""
     root = pathlib.Path(root)
     out = []
     for raw in root.glob("*/*/raw.jsonl"):
@@ -42,9 +31,38 @@ def stale_sessions(root=ROOT):
     return out
 
 
+def capture_broken_sessions(root=ROOT):
+    root = pathlib.Path(root)
+    out = []
+    for meta in root.glob("*/*/meta.json"):
+        d = meta.parent
+        if (d / "raw.jsonl").exists():
+            continue
+        try:
+            n_turns = json.loads(meta.read_text()).get("n_turns", 0)
+        except Exception:
+            continue
+        if n_turns > 0:
+            out.append(d)
+    return out
+
+
+def _flag_broken(root):
+    root = pathlib.Path(root)
+    by_agent = {ad: [] for ad in root.iterdir() if ad.is_dir()}
+    for d in capture_broken_sessions(root):
+        by_agent.setdefault(d.parent, []).append(d.name)
+    for agent_dir, names in by_agent.items():
+        names = sorted(names)
+        if _BROKEN_STATE.get(str(agent_dir)) == names:
+            continue
+        for sid in set(names) - set(_BROKEN_STATE.get(str(agent_dir)) or []):
+            _LOG.warning("capture-broken session (meta advances, no raw): %s", agent_dir / sid)
+        set_rollup_broken(agent_dir, names)
+        _BROKEN_STATE[str(agent_dir)] = names
+
+
 def sweep_once(root=ROOT):
-    """One pass: materialize every stale session. Fail-open per session — one bad session never
-    stops the sweep. Returns the dirs processed."""
     done = []
     for d in stale_sessions(root):
         try:
@@ -52,20 +70,20 @@ def sweep_once(root=ROOT):
             done.append(d)
         except Exception:
             pass
+    try:
+        _flag_broken(root)
+    except Exception as e:
+        _LOG.warning("capture-health flagging failed: %r", e)
     return done
 
 
 def watch(reader=None, root=ROOT):
-    """Warm loop: block on the wake channel (the proxy's pipe to our stdin) for one byte, coalesce
-    any bytes already waiting into a single sweep of every stale session, repeat. Returns at EOF —
-    the proxy that owns the write end has closed it — so the watcher's lifetime is bound to capture.
-    `sweep_once` is fail-open, so a bad session never breaks the loop."""
     f = reader if reader is not None else sys.stdin.buffer
     fd = f.fileno()
     while True:
-        if not os.read(fd, 4096):             # blocks until ≥1 byte or EOF (b"")
+        if not os.read(fd, 4096):
             return
-        while select.select([fd], [], [], 0)[0]:   # drain a burst → one sweep
+        while select.select([fd], [], [], 0)[0]:
             if not os.read(fd, 4096):
                 sweep_once(root)
                 return

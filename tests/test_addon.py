@@ -1,9 +1,3 @@
-"""Tests for the capture addon (addon.py).
-
-Two concerns matter most here: (1) secrets are redacted before anything touches
-disk, and (2) turns land in the right per-session directory. Both are exercised
-end-to-end against a fake flow, plus unit tests on the pure helpers.
-"""
 from __future__ import annotations
 
 import json
@@ -18,13 +12,14 @@ from cost_xray import addon
     ("/v1/messages?beta=true", True),
     ("/responses", True),
     ("/v1/chat/completions", True),
+    ("/v1/messages/count_tokens", False),
+    ("/v1/messages/count_tokens?beta=true", False),
     ("/v1/models", False),
     ("/health", False),
 ])
 def test_matched(make_flow, path, expected):
     flow = make_flow(body={}, path=path)
     assert addon._matched(flow) is expected
-
 
 
 def test_redact_headers_hides_secrets_keeps_rest():
@@ -63,7 +58,6 @@ def test_redact_body_is_recursive():
     assert body["api_key"] == "sk-leak"
 
 
-
 @pytest.mark.parametrize("ua,agent", [
     ("claude-cli/1.0", "claude"),
     ("Claude Code", "claude"),
@@ -75,7 +69,6 @@ def test_redact_body_is_recursive():
 ])
 def test_agent_of(ua, agent):
     assert addon._agent_of(ua) == agent
-
 
 
 def test_session_id_from_header(make_flow):
@@ -103,7 +96,6 @@ def test_session_id_falls_back_to_conn_id(make_flow):
     assert sid == "conn-01234567"
 
 
-
 def test_parse_sse_collects_events_and_merges_usage():
     sse = "\n".join([
         'event: message_start',
@@ -127,10 +119,8 @@ def test_parse_sse_handles_garbage_lines():
     assert usage is None
 
 
-
 @pytest.fixture
 def isolated_sessions(tmp_path, monkeypatch):
-    """Redirect the addon's on-disk session store into a temp dir."""
     sessions = tmp_path / "sessions"
     sessions.mkdir()
     monkeypatch.setattr(addon, "SESSIONS", sessions)
@@ -139,9 +129,6 @@ def isolated_sessions(tmp_path, monkeypatch):
 
 @pytest.fixture(autouse=True)
 def captured_kicks(monkeypatch):
-    """Replace the warm consumer with an in-memory recorder in EVERY addon test — never start a real
-    process (it would sweep the real ~/.cost-xray). Exercises the full signal path (kick →
-    `_signal_materialize` → `conn.send`); the returned list collects one entry per turn signalled."""
     sent = []
 
     class _RecorderConn:
@@ -284,8 +271,6 @@ def test_non_matching_path_is_ignored(make_flow, isolated_sessions):
 
 
 def test_response_signals_materialize(make_flow, isolated_sessions, captured_kicks):
-    # an HTTP turn (one response = one turn) signals the warm consumer exactly once — never
-    # tokenizing in-proxy (invariant #1).
     flow = make_flow(
         body={"model": "claude-opus-4-8"},
         req_headers={"user-agent": "claude-cli/1.0", "x-claude-code-session-id": "S6"},
@@ -295,12 +280,10 @@ def test_response_signals_materialize(make_flow, isolated_sessions, captured_kic
     addon.response(flow)
     addon._drain_writes_for_tests()
 
-    assert len(captured_kicks) == 1                      # one turn → one signal
+    assert len(captured_kicks) == 1
 
 
 def test_ws_signals_only_on_response_completed(make_flow, isolated_sessions, captured_kicks):
-    # Codex streams many frames per turn; only the turn-boundary `response.completed` frame signals —
-    # never one signal per frame.
     flow = make_flow(body=None, path="/backend-api/codex/responses",
                      req_headers={"user-agent": "codex/0.1"}, conn_id="feedfacecafebeef")
     flow.websocket = _Ws()
@@ -309,11 +292,46 @@ def test_ws_signals_only_on_response_completed(make_flow, isolated_sessions, cap
     flow.websocket.messages.append(_WsMessage(inter, from_client=False))
     addon.websocket_message(flow)
     addon._drain_writes_for_tests()
-    assert captured_kicks == []                          # mid-turn frame → no signal
+    assert captured_kicks == []
 
     completed = {"type": "response.completed",
                  "response": {"usage": {"input_tokens": 1, "output_tokens": 0}}}
     flow.websocket.messages.append(_WsMessage(completed, from_client=False, ts=1_700_000_001.0))
     addon.websocket_message(flow)
     addon._drain_writes_for_tests()
-    assert len(captured_kicks) == 1                      # turn boundary → exactly one signal
+    assert len(captured_kicks) == 1
+
+
+def test_count_tokens_calls_are_relayed_not_recorded(make_flow, isolated_sessions):
+    body = {"model": "claude-opus-4-8", "messages": [{"role": "user", "content": "hi"}]}
+    flow = make_flow(
+        body=body,
+        path="/v1/messages/count_tokens?beta=true",
+        req_headers={"user-agent": "claude-cli/1.0", "x-claude-code-session-id": "SCT"},
+        resp_text=json.dumps({"input_tokens": 5}),
+        resp_headers={"content-type": "application/json"},
+    )
+    addon.request(flow)
+    addon.response(flow)
+    addon._drain_writes_for_tests()
+    assert not (isolated_sessions / "claude" / "SCT").exists()
+
+
+def test_raw_write_failure_is_logged_not_silent(make_flow, isolated_sessions, monkeypatch, caplog):
+    import logging
+
+    def boom(*a, **k):
+        raise OSError("disk says no")
+
+    monkeypatch.setattr(addon.raw_codec, "append_record", boom)
+    flow = make_flow(
+        body={"model": "claude-opus-4-8"},
+        req_headers={"user-agent": "claude-cli/1.0", "x-claude-code-session-id": "SLOG"},
+        resp_text=json.dumps({"usage": {"input_tokens": 5}, "content": []}),
+        resp_headers={"content-type": "application/json"},
+    )
+    with caplog.at_level(logging.WARNING):
+        addon.response(flow)
+    assert "raw write failed" in caplog.text
+    assert "SLOG" in caplog.text
+    assert not (isolated_sessions / "claude" / "SLOG" / "raw.jsonl").exists()

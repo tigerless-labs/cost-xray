@@ -44,13 +44,6 @@ dev = [
     "pytest>=7",
     "ruff>=0.4",
 ]
-# Accurate, auto-updated model pricing. Optional: cost.rates() falls back to a small
-# hardcoded table when LiteLLM is absent, so the suite runs without it.
-pricing = [
-    "litellm>=1.40",
-]
-# Interactive TUI (mouse + keyboard, drill-down). The rich.Live `tui` module is the
-# headless fallback; `tui_app` (Textual) needs this.
 tui = [
     "textual>=0.50",
 ]
@@ -58,8 +51,10 @@ tui = [
 [tool.setuptools]
 packages = ["cost_xray"]
 
+[tool.setuptools.package-data]
+cost_xray = ["data/*.json"]
+
 [tool.pytest.ini_options]
-# Run `import cost_xray...` against the repo checkout without an install step.
 pythonpath = ["."]
 testpaths = ["tests"]
 addopts = "-q"
@@ -69,11 +64,8 @@ line-length = 100
 target-version = "py310"
 
 [tool.ruff.lint]
-# pyflakes (F), pycodestyle (E/W), isort (I), bugbear (B), pyupgrade (UP).
 select = ["E", "F", "W", "I", "B", "UP"]
-# Bare-ish excepts are intentional in the proxy hot path (must never crash the agent).
 ignore = ["E501", "B904"]
 
 [tool.ruff.lint.per-file-ignores]
-# Tests build deliberately partial fake objects and use assert-heavy style.
 "tests/*" = ["B011"]

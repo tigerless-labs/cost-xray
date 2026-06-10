@@ -1,6 +1,3 @@
-"""Exact Claude tokenization (count_tokens.py): the cumulative-prefix differencing, the
-no-key/error fallbacks, and caching — with the HTTP call mocked via the `_http` seam, so no
-network and no key are needed."""
 from __future__ import annotations
 
 from cost_xray import count_tokens

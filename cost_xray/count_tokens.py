@@ -1,24 +1,3 @@
-"""Exact Claude tokenization via Anthropic's own `count_tokens` API (design.md §6/§8).
-
-Claude's tokenizer is private, so tiktoken o200k is only an *approximation* for Claude (it's
-exact for Codex). The one exact route is Anthropic's `/v1/messages/count_tokens` endpoint. We
-get exact **per-source** counts by differencing cumulative prefixes:
-
-    A = count(messages)               → messages
-    B = count(system, messages)       → +system
-    C = count(system, tools, messages)→ full  (cross-checks against usage.input_tokens)
-    ⇒ system = B−A, tools = C−B, static = C−A, messages = A
-
-**Auth (two methods, both supported).** The proxy redacts the request's `authorization` /
-`x-api-key` before disk, so the read layer has no credential of its own:
-  1. **API key** — `COST_XRAY_ANTHROPIC_API_KEY` (or `ANTHROPIC_API_KEY`) → `x-api-key`.
-  2. **OAuth** — the Claude Code login (`claude_login`) → `Bearer` + the oauth beta. The locator
-     is config-dir-aware (`CLAUDE_CONFIG_DIR`), reads the file backend or the macOS Keychain, and
-     withholds an expired token (with a clear notice). This is what Claude Code itself uses for
-     `/context`, so a Max/Pro user needs no API key.
-API key wins if both are present; if neither (or the login is expired), `exact_anchors` returns
-`None` and the caller stays on tiktoken+calibration. Lazy + cached (network + rate limits).
-"""
 from __future__ import annotations
 
 import hashlib
@@ -43,8 +22,6 @@ def _oauth_token():
 
 
 def auth_headers(key=None, oauth=None):
-    """Base request headers carrying auth — `x-api-key` for an API key, or `Bearer` + the
-    oauth beta for the Claude Code OAuth token. `None` if neither is available."""
     key = key or os.environ.get("COST_XRAY_ANTHROPIC_API_KEY") or os.environ.get("ANTHROPIC_API_KEY")
     if key:
         return {"x-api-key": key, "anthropic-version": VERSION, "content-type": "application/json"}
@@ -72,13 +49,6 @@ def _count(model, auth, *, system=None, tools=None, messages=None, _http=None):
 
 
 def per_event_tokens(request, model, key=None, oauth=None, _http=None):
-    """Exact tokens per static event — `system`, then **each tool** — via cumulative-prefix
-    differencing against a stub message: each piece measured *in place*, so the diffs
-    telescope. Plus a final `messages` marginal. Returns `[(label, tokens)]` whose sum equals
-    `count(full)` minus the tiny stub baseline (≈ usage). Messages stays one piece on purpose
-    — truncating it mid-conversation makes invalid sequences (a `tool_result` without its
-    `tool_use`) that the API rejects. **~one API call per tool** — opt-in, small payloads
-    except the final full count."""
     auth = {} if _http is not None else auth_headers(key, oauth)
     if auth is None or not isinstance(request, dict):
         return None
@@ -106,15 +76,6 @@ _OUT_DIFFABLE = {"text", "thinking", "redacted_thinking", "output_text", "messag
 
 
 def per_output_event_tokens(blocks, model, key=None, oauth=None, _http=None):
-    """Exact tokens per **output** block — **validation only**, never the hot path (verification.md).
-    Claude's generated blocks aren't directly countable (`count_tokens` takes an *input* `messages`
-    array), so we place them as a trailing assistant message and **cumulative-prefix difference**
-    each `text`/`thinking` block in place (tail − head): `tokens(b_k) =
-    count(stub + assistant[safe[:k] + TERM]) − count(stub + assistant[safe[:k-1] + TERM])`. The
-    constant `TERM` text keeps every prefix valid (never ends in `thinking`) and cancels in the
-    difference, so adjacent blocks never interfere. `tool_use` blocks are excluded (not isolable
-    from their next-turn `tool_result`). Returns `[(bucket, tokens)]` (bucket via `events.bucket_of`)
-    or `None` (no auth / error / no diffable blocks)."""
     auth = {} if _http is not None else auth_headers(key, oauth)
     if auth is None or not isinstance(blocks, list):
         return None
@@ -147,17 +108,12 @@ _OUT_BUCKET_TYPES = {
 
 
 def _out_norm(blocks):
-    """Output blocks with streamed thinking given a `thinking:""` (count_tokens requires the field)."""
     return [({**b, "thinking": ""} if b.get("type") in _OUT_BUCKET_TYPES["thinking"]
              and "thinking" not in b else b)
             for b in blocks if isinstance(b, dict)]
 
 
 def _out_wrap(bs):
-    """A **valid** `messages` array wrapping output blocks as an assistant turn — the shared shape
-    behind every output differencer. Handles the three measured count_tokens constraints: a
-    `tool_use` is paired with a synthetic `tool_result` (matched by id, trailing user message), a
-    trailing `thinking` gets a `.` text terminator, and a stub user turn leads."""
     content, results = [], []
     for i, b in enumerate(bs):
         if b.get("type") in _OUT_BUCKET_TYPES["tool_io"]:
@@ -175,11 +131,6 @@ def _out_wrap(bs):
 
 
 def per_output_bucket_tokens(blocks, model, key=None, oauth=None, _http=None):
-    """Per-bucket **output** tokens (`thinking` / `text` / `tool_io`) by leave-one-out differencing
-    on a valid assistant turn — the output analogue of `per_bucket_tokens`, **validation only**.
-    Pins each bucket exactly so the output calibration can mirror the input (thinking via
-    count_tokens, the rest tiktoken-proportional — verification.md). Returns `{bucket: tokens}` or
-    `None`."""
     auth = {} if _http is not None else auth_headers(key, oauth)
     if auth is None or not isinstance(blocks, list):
         return None
@@ -200,12 +151,6 @@ def per_output_bucket_tokens(blocks, model, key=None, oauth=None, _http=None):
 
 
 def input_thinking_tokens(messages, model, key=None, oauth=None, _http=None):
-    """**Production** exact-mode helper: the input `thinking` size, the lean **2-call** diff
-    `count(messages) − count(messages without thinking)` — the input analogue of
-    `output_thinking_tokens`. Pins the input thinking bucket exactly in
-    `reconcile_turn(anchors={"thinking": …})` instead of the `THINKING_R` estimate. Cached by
-    content (the historical thinking blocks repeat across turns). Returns int, `0` (no thinking),
-    or `None` (no auth / error)."""
     auth = {} if _http is not None else auth_headers(key, oauth)
     if auth is None or not isinstance(messages, list) or not messages:
         return None
@@ -227,11 +172,6 @@ def input_thinking_tokens(messages, model, key=None, oauth=None, _http=None):
 
 
 def output_thinking_tokens(blocks, model, key=None, oauth=None, _http=None):
-    """**Production** exact-mode helper: just the output `thinking` size, the lean **2-call** diff
-    `count(all) − count(without thinking)` on the valid wrapper (cheaper than the full
-    `per_output_bucket_tokens`). Used to pin output thinking in `reconcile_turn(output_anchors=…)`
-    so the displayed output text/thinking split is exact (verification.md). Returns int, `0` (no
-    thinking), or `None` (no auth / error)."""
     auth = {} if _http is not None else auth_headers(key, oauth)
     if auth is None or not isinstance(blocks, list):
         return None
@@ -256,21 +196,6 @@ _PLACEHOLDER = {"type": "text", "text": "."}
 
 
 def per_bucket_tokens(request, model, key=None, oauth=None, _http=None):
-    """Per-bucket tokens within Messages by **leave-one-out differencing** in our own bucket
-    classification — each bucket = `A − count(messages with that bucket's blocks removed)`,
-    differenced against the full count A (not chained block-by-block), no proportional scaling.
-
-    Two wire facts shape it: (1) removing a whole user-text turn empties a message and breaks
-    role alternation (400), so emptied messages keep a `"."` placeholder (≈0 tokens); (2)
-    `tool_use` and `tool_result` are paired — removing one orphans the other (400) — so they
-    can only be removed together and are reported combined as `tool_io`. The per-bucket
-    marginals miss the per-message framing that survives every single removal (~10%), so a
-    `structure` row carries that honest remainder (`A − Σ marginals`); the rows sum to the
-    exact Messages total A. ~4 calls over the full messages. Returns `{bucket: tokens}` /`None`.
-
-    NOTE: this is the leave-one-out marginal — a bucket's *own* content. It is NOT the chained
-    cumulative (telescoping) split; chaining would sum to A with no `structure` row but is the
-    block-by-block prefix differencing we deliberately avoid here."""
     auth = {} if _http is not None else auth_headers(key, oauth)
     if auth is None or not isinstance(request, dict):
         return None
@@ -314,9 +239,6 @@ def _msg_block_bucket(t):
 
 
 def _drop_blocks(messages, drop):
-    """`messages` with the `(i, j)` coords in `drop` removed — a `.` placeholder if a message
-    empties, a `.` terminator if a removal leaves a message ending in `thinking` (both invalid for
-    count_tokens otherwise)."""
     out = []
     for i, m in enumerate(messages):
         if not isinstance(m, dict):
@@ -338,17 +260,6 @@ def _drop_blocks(messages, drop):
 
 
 def per_message_event_tokens(request, model, key=None, oauth=None, _http=None):
-    """**Validation only** (benchmark, verification.md): exact tokens for **each individual Messages
-    block**, by leave-one-out differencing — `marginal(b) = A − count(messages without b)` against the
-    full Messages count A, in our own bucketing. The finest input truth (per occurrence), one level
-    below `per_bucket_tokens`. Same wire constraints: a `tool_use` and its `tool_result` are removed
-    **together** (removing one orphans the other → 400) and reported as a single `tool_io` unit; an
-    emptied message keeps a `.` placeholder; a removal leaving a trailing `thinking` gets a `.`
-    terminator. Returns `[(coord, bucket, tokens)]`. For a `text`/`thinking` block
-    `coord = ("msg", i, j)` (== `verify.ref_coord(ref)`). For a **`tool_io`** unit
-    `coord = ("tool_io", <tool_id>)` — keyed by the tool id so both the `tool_use` and its
-    `tool_result` `ours` events (they share `e["id"]`) map to the one truth row. ~one API call per
-    block, so benchmark `--limit` bounds it. `None` on no-auth / error."""
     auth = {} if _http is not None else auth_headers(key, oauth)
     if auth is None or not isinstance(request, dict):
         return None
@@ -395,8 +306,6 @@ def per_message_event_tokens(request, model, key=None, oauth=None, _http=None):
 
 
 def _without_thinking(messages):
-    """`messages` with every thinking block removed (emptied turns dropped — thinking is never a
-    whole message, so this stays a valid sequence). For the thinking leave-one-out anchor."""
     out = []
     for m in messages:
         if not isinstance(m, dict):
@@ -412,11 +321,6 @@ def _without_thinking(messages):
 
 
 def exact_anchors(request, model, key=None, oauth=None, _http=None):
-    """Exact per-source token counts for one Anthropic request via `count_tokens`, or `None`
-    (no auth / error / non-dict). Returns `{system, tools, static, messages, thinking, total}`.
-    `thinking` (leave-one-out `messages − no-thinking`) is what `reconcile_turn` uses to pin the
-    thinking bucket exactly instead of the `THINKING_R` estimate. Costs one extra call only when
-    thinking is present. Cached by request content; `_http` is the test seam."""
     auth = {} if _http is not None else auth_headers(key, oauth)
     if auth is None or not isinstance(request, dict):
         return None
@@ -468,18 +372,6 @@ def _tool_store_save(store):
 
 
 def tools_exact(tools, model, key=None, oauth=None, _http=None, now=None):
-    """**Production** exact-mode helper: exact tokens per tool schema, **in context** — the
-    cumulative-prefix marginals (`per_event_tokens`), aligned to `tools`. Must be in-context, not
-    standalone: counting each tool *alone* charges the shared tool-framing N times (~32% over,
-    measured live), and the marginals here sum to the real tools total instead.
-
-    **Persistently cached** by the tools-set hash, with a **1-day TTL** (`tool_tokens.json` under
-    `~/.cost-xray`): tool defs are static across a session and rarely change, so this is **one
-    count_tokens computation per distinct tool set per day**, reused (across restarts) thereafter —
-    and once cached the per-tool number is **always** the exact value, never re-derived from tiktoken.
-    Group anchors can't fix the relative split between schemas (verification.md), so per-tool
-    differencing is the only exact route. `now` is a test seam. Returns `[tokens]` aligned to
-    `tools`, or `None` (no auth / error)."""
     if not isinstance(tools, list) or not tools:
         return None
     ck = f"{model}|" + hashlib.sha1(json.dumps(tools, ensure_ascii=False, sort_keys=True,

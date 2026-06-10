@@ -1,11 +1,3 @@
-"""Anthropic adapter: raw wire (`/v1/messages`) → canonical `Event[]`.
-
-The only Claude-specific code (design.md §9). It locates system/tools/messages by
-position, assigns `zone`/`section`/`bucket`, harvests `tool`/`skill`/`role`, joins
-`tool_use` ↔ `tool_result` by id, and carves the intermittent skill *ads* out of
-`system` via the structured detector (detectors.py). Emits canonical events only —
-**no `group_by` here** (that is the shared layer's job).
-"""
 from __future__ import annotations
 
 import json
@@ -21,11 +13,6 @@ _CWD_RE = re.compile(
 
 
 def project_name(records):
-    """The project the session ran in — the **full working-directory path** from Claude Code's env
-    block, re-sent each turn. The full cwd is the project *identity* (like CodeBurn: the literal cwd,
-    never a guessed git root — so `/repo` and `/repo/sub` are distinct, and `/a/web` ≠ `/b/web`); the
-    TUI shows its basename. Anchored to the env preamble so conversation mentions of the phrase don't
-    mis-classify it. `None` if absent."""
     for rec in records[:50]:
         req = _request(rec)
         if not isinstance(req, dict):
@@ -37,9 +24,6 @@ def project_name(records):
 
 
 def _first_human_text(content):
-    """The human-typed text of a user message — the first `text` block NOT wrapped in a `<…>`
-    tag (Claude Code prepends `<system-reminder>` / `<command-name>` / `<local-command-…>`
-    blocks before the real prompt). `None` if the message is all injected wrappers."""
     if isinstance(content, str):
         return content
     if isinstance(content, list):
@@ -52,10 +36,6 @@ def _first_human_text(content):
 
 
 def session_name(records):
-    """A human session label: the **first user message** (truncated). Claude re-sends the full
-    history every turn, so any turn's `messages` start with the session's first prompt — we take
-    the fullest turn's first user message that carries human text, skipping the startup `quota`
-    probe and the injected `<…>` wrappers. `None` if nothing usable (caller falls back to the id)."""
     best = None
     for rec in records:
         req = _request(rec)
@@ -81,7 +61,6 @@ INCREMENTAL = True
 
 
 def to_events(record, turn=0):
-    """Decompose one raw.jsonl record (or a bare request body) into canonical events."""
     req = _request(record)
     out = []
     if not isinstance(req, dict):
@@ -116,7 +95,6 @@ def to_events(record, turn=0):
     return out
 
 
-
 def _request(record):
     if isinstance(record, dict) and "request" in record:
         return record["request"]
@@ -134,18 +112,10 @@ def _response_content(record):
 
 
 def response_blocks(record):
-    """The turn's reconstructed output content blocks (SSE → blocks, or `body.content`), or
-    `[]`. Public accessor for the verification layer (count_tokens output differencing); the
-    read path itself goes through `to_events`."""
     return _response_content(record) or []
 
 
 def raw_units(record):
-    """Verification contract (verify.coverage): `[(coord, content)]` for **every** countable raw
-    unit, with `coord` matching the `ref` `to_events` assigns and `content` the exact value it
-    tokenises — so `Σ ntok(_count_content(content))` equals `Σ` the events' tokens unit-for-unit
-    (the drop guard). Mirrors `to_events`' positional walk; the only Claude-specific piece the
-    shared completeness check needs."""
     req = _request(record) or {}
     if not isinstance(req, dict):
         return []
@@ -174,13 +144,7 @@ def raw_units(record):
     return units
 
 
-
 def _ad_carve(full, ads, base_ref, *, zone, section, bucket, role=None):
-    """Split a text slot carrying the skills catalog into a remainder event + one per-skill ad
-    event. Ads always land in Static `Skills` whatever slot carried them, so a catalog injected
-    into a system-role message rolls up with one injected into the `system` field. MECE: each
-    ad's original span is removed from the remainder, then both are tokenised from real text
-    (tokenizers aren't additive, so subtracting counts would leak)."""
     remainder = full
     for a in ads:
         remainder = remainder.replace(a["span"], "", 1)
@@ -205,10 +169,6 @@ def _system_events(system, turn):
 
 
 def _text_slot(text, ref, role, content):
-    """A Messages text slot → a catalog carve (ads → Static Skills), a tagged Skill-load body
-    (the injected SKILL.md, attributed to its skill), or a plain text event. `content` is what
-    gets tokenised/hashed (the raw string for bare-string messages, the block dict for list
-    blocks) — kept per-source so hashing of ordinary text is unchanged."""
     ads = detectors.skill_ads(text)
     if ads:
         return _ad_carve(text, ads, ref, zone="input", section="messages", bucket="text", role=role)
@@ -224,9 +184,7 @@ def _join_text(blocks):
     return blocks if isinstance(blocks, str) else ""
 
 
-
 def _tool_use_index(messages):
-    """tool_use_id → tool name, so a tool_result can be labelled by its producer."""
     idx = {}
     for msg in messages:
         content = msg.get("content") if isinstance(msg, dict) else None
@@ -271,9 +229,7 @@ def _block_events(block, *, ref, zone, section, role=None, id2tool=None):
                           content=block, tool=tool, skill=skill, role=role, id=call_id)]
 
 
-
 def _blocks_from_sse(sse_events):
-    """Reconstruct response content blocks from buffered Anthropic SSE events."""
     blocks, order = {}, []
     for e in sse_events:
         et = e.get("type")
@@ -318,18 +274,12 @@ def _blocks_from_sse(sse_events):
     return out
 
 
-
 def iter_turns(records):
-    """One raw.jsonl record already *is* one completed turn (request+response+usage), so
-    a turn is just a completion record. (Codex differs — see adapters/openai.iter_turns.)"""
     from cost_xray.cost import is_completion
     return [r for r in records if isinstance(r, dict) and is_completion(r)]
 
 
 def window(record):
-    """Context window for this turn. The 1M signal is the `anthropic-beta: …context-1m…`
-    header (or a `[1m]` model tag) — NOT the model name or `max_tokens` (that's the
-    output cap). Verified against captured headers (design.md §4)."""
     headers = (record.get("request_headers") or {}) if isinstance(record, dict) else {}
     betas = headers.get("anthropic-beta", "")
     if "context-1m" in betas or "[1m]" in _model(record).lower():
@@ -338,7 +288,6 @@ def window(record):
 
 
 def usage(record):
-    """Anthropic `usage` → canonical {fresh,cached,rewrote,output,write_1h}."""
     u = (record.get("usage") if isinstance(record, dict) else None) or {}
     cc = u.get("cache_creation_input_tokens")
     cc_1h = 0
@@ -354,9 +303,6 @@ def usage(record):
 
 
 def locate(records, ref):
-    """Reverse of `to_events`: the raw block a `ref` points at, for the TUI's lazy content
-    fetch. `ref.turn` indexes the completion records (one per turn). Anthropic-specific raw
-    shape, so it lives here — the shared `drill` layer just dispatches and renders the text."""
     turns = iter_turns(records)
     t = ref.get("turn") if isinstance(ref, dict) else None
     if not isinstance(t, int) or not 0 <= t < len(turns):

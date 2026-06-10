@@ -1,26 +1,3 @@
-"""The verification board — accuracy benchmark + completeness check (docs/design/verification.md).
-
-The shared, **agent-agnostic, network-free** core of the project's verification module. Like the
-rest of the read layer it **never branches on agent** (workflow.md invariant 3): every entry point
-takes an `adapter` and dispatches through it. It answers three questions about the numbers we show,
-each by *comparing* our production decomposition against a ground truth the **caller** supplies —
-this module never calls the network:
-
-1. **Per-event accuracy** (`bench_turn`, `residuals`) — how close our calibrated per-source /
-   per-tool / per-bucket tokens are to the exact truth, on **both** the input and output axes.
-   Where the truth comes from is per-agent and lives in the benchmark *driver*, not here:
-   **Claude** is tiktoken-approximate so its truth is Anthropic's `count_tokens` (live, opt-in);
-   **Codex** is tiktoken-**exact** (o200k is its real tokenizer) so its truth is the local count +
-   the wire `usage` total (offline, CI-able). Either way the numbers are passed in.
-2. **Completeness** (`coverage`) — that **every** raw wire unit becomes exactly one event (no
-   silently dropped block), structurally *and* by an independent token recount. The per-agent wire
-   shape is read through `adapter.raw_units`.
-3. **Aggregation** (`aggregate`, `render_markdown`) — roll per-turn residuals into a structured
-   p50 / p90 / max report across a whole session corpus.
-
-Production calc is unchanged: we still derive via tiktoken + `classify.reconcile_turn`. The exact
-tokenizers (`count_tokens` differencing, o200k-as-truth) live **only** on the verification side.
-"""
 from __future__ import annotations
 
 from cost_xray.analyze import ntok
@@ -32,12 +9,6 @@ _SYSTEM = ("system",)
 
 
 def residuals(ours, truth):
-    """Per-key residual of `ours` (what we'd display) against `truth` (the exact count).
-
-    Returns `{key: {ours, truth, ratio, signed_rel, abs_rel}}` over the **union** of keys.
-    `ratio = ours/truth`; `signed_rel = (ours−truth)/truth` (sign tells direction of error);
-    `abs_rel = |signed_rel|`. A key present on only one side gets the missing side as `0.0` and
-    `None` for ratio/rel when `truth == 0` (no meaningful proportion)."""
     out = {}
     for k in sorted(set(ours) | set(truth), key=str):
         o = float(ours.get(k, 0.0))
@@ -52,11 +23,6 @@ def residuals(ours, truth):
 
 
 def ref_coord(ref):
-    """The raw wire coordinate an event `ref` points at, or `None`. Shared across agents because
-    the adapters use one unified `ref` shape, differing only in the system field name
-    (`system` vs `instructions`) — both fold to `("system",)`. The skill-ad carve-out emits
-    several `field=="system"` events that all map here, so the system slot counts as covered once
-    (MECE) rather than as a missing coordinate."""
     if not isinstance(ref, dict):
         return None
     field = ref.get("field")
@@ -72,21 +38,6 @@ def ref_coord(ref):
 
 
 def coverage(record, adapter, events=None):
-    """Completeness check for one turn — proof we drop no event (verification.md axis 3).
-
-    Agent-agnostic: the per-agent wire shape is read through `adapter.raw_units(record)`, which
-    yields `[(coord, content)]` for every countable raw unit (system, each tool, each message
-    block, each output block). Two independent guards plus the unknown-type tripwire:
-      * **structural** — every raw coordinate is covered by ≥1 event `ref`, and no `ref` points
-        outside the raw (`missing` / `orphan` both empty);
-      * **token** — `Σ` the non-system events' raw tokens equals the independent recount of the
-        same units **exactly** (`token_exact_delta == 0`); a dropped block shows as a gap here even
-        if the structural pass somehow missed it. System is excluded — the skill-ad carve-out
-        tokenises remainder + spans separately, which is not additive with one `ntok(full system)`;
-      * **tripwire** — `unknown_types` lists any wire `type` not yet mapped to a bucket.
-
-    `ok` iff nothing missing, nothing orphaned, token delta zero. `system_token_delta` is reported
-    but not gating (it only reflects the carve-out, never a drop)."""
     events = adapter.to_events(record) if events is None else events
     units = list(adapter.raw_units(record))
 
@@ -134,12 +85,6 @@ def _msg_bucket(b):
 
 
 def local_truths(events):
-    """Per-source / per-tool / per-bucket / per-output token sums grouped straight from **raw**
-    events (tiktoken). For an **o200k-exact agent (Codex)** these *are* the exact ground truth —
-    o200k is its real tokenizer — so this is the offline truth driver the benchmark uses for Codex
-    (verification.md). For Claude they're only the approximation under test; use `count_tokens`.
-    Returns `{anchors, per_tool, per_bucket, per_output, total_in, total_out}` in the exact shape
-    `bench_turn` expects."""
     def s(p):
         return sum(e["tokens"] for e in events if p(e))
 
@@ -167,22 +112,6 @@ def _csum(enriched, pred):
 def bench_turn(record, model, adapter, *, anchors=None, per_tool=None, per_bucket=None,
                per_output=None, per_message=None, per_output_event=None,
                output_thinking=None, thinking_r=1.0, pin_tools=False):
-    """One turn's accuracy rows + completeness, agent-agnostic. **No network** — the exact truths
-    are passed in (the per-agent driver gathers them):
-
-      * `anchors`     — per-source exact totals (`{system,tools,static,messages,thinking}`)
-      * `per_tool`    — per-tool-schema exact list `[("tool:<name>", tok), …]`
-      * `per_bucket`  — per Messages-bucket exact dict (`{thinking,text,tool_io,structure}`)
-      * `per_output`  — per output-block exact list `[(bucket, tok), …]`
-
-    Each may be `None` (truth unavailable → that facet is skipped). `ours` is our **calibrated**
-    number (exactly what the product shows) via `reconcile_turn`, grouped purely by **canonical
-    event fields** (`bucket`/`section`/`zone`/`skill`) — no agent branching.
-
-    `pin_tools` makes `ours` match **production** exact mode: each tool schema is pinned to its exact
-    count (`per_tool`), exactly as `materialize._exact_pins` does — so the `input · schema` facet
-    reads the production ~0%, not the proportional baseline. Returns
-    `{meta, facets:{<facet>:{ours,truth,residual}}, coverage}`."""
     events = adapter.to_events(record)
     usage = adapter.usage(record)
     if pin_tools and per_tool:
@@ -285,7 +214,6 @@ def _pct(xs, p):
 
 
 def _stats(rows):
-    """rows = list of (signed_rel, abs_rel) with non-None abs_rel."""
     ar = [a for _s, a in rows]
     sr = [s for s, _a in rows if s is not None]
     return {"n": len(rows), "abs_rel_p50": _pct(ar, 0.5), "abs_rel_p90": _pct(ar, 0.9),
@@ -294,8 +222,6 @@ def _stats(rows):
 
 
 def aggregate(turn_reports):
-    """Roll many `bench_turn` reports into p50/p90/max residual stats per facet (and per key
-    within a facet), plus a completeness roll-up. Returns `{facets, coverage}`."""
     facet_rows = {}
     facet_key_rows = {}
     for rep in turn_reports:
@@ -347,11 +273,6 @@ _FACET_ORDER = ("input_tool", "input_message", "output_event",
 
 
 def render_markdown(agg, title="event-token precision"):
-    """Compact markdown for one agent's `aggregate` (used by experiments/benchmark.py, pinned by
-    tests). Two methods, per the validation board (verification.md): **per-event** (each tool /
-    message-bucket / output-block vs count_tokens differencing — Claude only, since o200k is exact
-    *for* Codex so it has no independent per-event truth) and **total** reconstruction (raw tiktoken
-    vs the exact wire `usage`). Plus completeness."""
     def f(x):
         return "—" if x is None else f"{x * 100:.1f}%"
 

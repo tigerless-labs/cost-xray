@@ -1,16 +1,3 @@
-"""Canonical Event — the one shape every agent's wire is translated into.
-
-design.md §4 (event model) + §9 (per-agent adapter, shared classification).
-An adapter (`adapters/<agent>.py`) turns raw wire bytes into a list of these dicts;
-everything downstream (`classify.py`) is agent-agnostic and never branches on agent —
-that is the whole point of the canonical seam.
-
-Field groups (read an event top to bottom = its position in the TUI tree):
-  path     : zone / section / bucket   — group_by these = the context/cost panel
-  leaf     : tool / skill / role        — harvested drill-down (nullable)
-  measure  : tokens                     — size; calibrated to `usage` at fold
-  machinery: ref / id / type / hash     — provenance, dedup, call↔result join
-"""
 from __future__ import annotations
 
 import hashlib
@@ -43,9 +30,6 @@ ZONES = ("input", "output")
 
 
 def bucket_of(wire_type):
-    """Canonical bucket for a wire block `type`. Unknown → the verbatim type (so it
-    self-appears as its own row); `system`/`schema` have no wire type and are assigned
-    positionally by the adapter instead."""
     if wire_type is None:
         return None
     return BUCKET_OF.get(wire_type, wire_type)
@@ -57,7 +41,6 @@ def chash(content):
 
 
 def mcp_server(tool):
-    """Derived: server from an `mcp__<server>__<tool>` name, else None (builtin)."""
     if tool and tool.startswith("mcp__"):
         parts = tool.split("__")
         return parts[1] if len(parts) >= 2 else "unknown"
@@ -65,15 +48,10 @@ def mcp_server(tool):
 
 
 def side_of(zone):
-    """Derived cost axis: input vs output. `zone` already is that (kept explicit)."""
     return zone
 
 
 def category(event):
-    """A (group, label) for the on-screen breakdown — Static flattened into Claude Code's
-    `/context` categories (System prompt / System tools / MCP tools / Skills), Messages &
-    Output split by bucket. The familiar `/context` view, but harvested from our events so
-    it also carries cost. (Memory is a future overlay; for now it sits in System prompt.)"""
     z, s, b = event.get("zone"), event.get("section"), event.get("bucket")
     tool, skill, role = event.get("tool"), event.get("skill"), event.get("role")
     if z == "output":
@@ -100,12 +78,6 @@ def category(event):
 
 
 def _count_content(content):
-    """The bytes worth tokenizing for a wire block — its real *content*, not the JSON
-    wrapper or verification metadata. Claude Code clears thinking *text* from history but
-    leaves a large base64 `signature`; tokenizing `json.dumps(block)` would charge that
-    signature (plus JSON escaping and structure keys) as context — measured to inflate
-    Messages ~1.8× (thinking blocks there were 98% signature, 0% text). So we count the
-    content field, not the whole block."""
     if not isinstance(content, dict):
         return content
     if isinstance(content.get("text"), str):
@@ -123,12 +95,6 @@ def _count_content(content):
 
 def make_event(*, zone, section, ref, bucket=None, wire_type=None, content=None,
                tokens=None, tool=None, skill=None, role=None, id=None):
-    """Build one canonical event.
-
-    `bucket` may be given explicitly (`system`/`schema`, which carry no wire `type`)
-    or derived from `wire_type`. `tokens` defaults to a tiktoken count of `content`
-    (an approximation for Claude — calibrated to the turn's `usage` at fold time,
-    see classify.reconcile_turn / docs/local/testing.md)."""
     return {
         "zone": zone,
         "section": section,
@@ -145,20 +111,10 @@ def make_event(*, zone, section, ref, bucket=None, wire_type=None, content=None,
 
 
 def canon_usage(fresh, cached, rewrote, output, write_1h=False, output_reasoning=0):
-    """Canonical per-turn usage — the shape every `adapter.usage()` returns (design.md
-    §9). Field *locations* are per-agent (Anthropic `cache_read_input_tokens` vs OpenAI
-    `cached_tokens`); this canonical shape is what the shared cost layer consumes.
-    `output_reasoning` is the exact reasoning-token slice of `output` when the wire exposes it
-    (OpenAI/Codex `output_tokens_details.reasoning_tokens`); 0 otherwise — it lets the read layer
-    pin the output thinking bucket exactly, for free (verification.md)."""
     return {"fresh": int(fresh), "cached": int(cached), "rewrote": int(rewrote),
             "output": int(output), "write_1h": bool(write_1h),
             "output_reasoning": int(output_reasoning)}
 
 
 def unknown_types(events):
-    """Wire `type` values not yet mapped to a bucket — the tripwire (design.md §4).
-
-    These still render (bucket == the verbatim type); this set just tells you a new
-    wire block type has appeared so you can give it a display name / placement."""
     return {e["type"] for e in events if e["type"] is not None and e["type"] not in BUCKET_OF}

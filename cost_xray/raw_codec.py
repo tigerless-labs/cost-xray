@@ -1,16 +1,3 @@
-"""Raw codec — the one seam the dedup storage format touches (design/read-layer.md).
-
-A long session re-sends its whole history every turn, so storing each turn's full body verbatim is
-quadratic. The codec splits a turn into content-addressed **blocks** (each `messages` element, plus
-the `tools` array and `system` whole) and a lightweight **delta record** that keeps everything else
-verbatim and replaces those values with refs into a per-session **block store**. Reconstruction
-resolves the refs back, byte-for-byte, so every downstream consumer sees the same per-turn record as
-before. Legacy whole-body records (no delta marker) pass through unchanged, so old and new sessions
-coexist.
-
-The encode/decode pair is pure (record <-> (delta, new blocks)); the dir-level helpers own the
-block store and the append-only delta log.
-"""
 from __future__ import annotations
 
 import hashlib
@@ -52,12 +39,6 @@ def _prefix(a, b) -> int:
 
 
 def _encode_messages(msgs, blocks, ctx):
-    """The message list's reference slot. Each message is a block; the ordered ref list is stored as a
-    keyframe (the whole list as one content-addressed block) or a delta against the most recent
-    keyframe (kept prefix + new tail). A re-keyframe fires when the history is rewritten (prefix
-    collapses) or the chain would grow unbounded. `ctx` (kept by the writer across turns) holds the
-    current keyframe's hash/refs + chain length; `ctx is None` makes every list a self-contained
-    keyframe."""
     refs = []
     for m in msgs:
         h = _hash(m)
@@ -91,11 +72,6 @@ def _decode_messages(slot, store):
 
 
 def encode(record, ctx=None):
-    """Split a full record into a (delta_record, {hash: block}) pair. The delta keeps every field
-    verbatim except `request.messages` / `request.tools` / `request.system`, which become refs; the
-    returned blocks are the unique pieces to add to the store. `ctx` carries the writer's keyframe
-    state across turns so the message ref list is delta-encoded (omit it for a self-contained record).
-    A record with no dict `request` (e.g. a Codex WS frame) is returned unchanged with no blocks."""
     req = record.get("request") if isinstance(record, dict) else None
     if not isinstance(req, dict):
         return record, {}
@@ -121,10 +97,6 @@ def encode(record, ctx=None):
 
 
 def decode(record, store):
-    """Reconstruct a full record from a delta record + the block `store` (hash -> block). A
-    non-delta (legacy) record is returned unchanged. Reconstruction is stateless per record — a delta
-    message slot resolves from its keyframe block alone, no forward replay — so the result is identical
-    to the original record and `_dump(decode(...))` equals the original raw line byte-for-byte."""
     if not _is_delta(record):
         return record
     out = {k: v for k, v in record.items() if k != "_fmt"}
@@ -145,8 +117,6 @@ def decode(record, store):
 
 
 def load_store(d: pathlib.Path) -> dict:
-    """The session's block store (hash -> block). Empty when no sidecar exists (a legacy-only or
-    fresh session)."""
     p = pathlib.Path(d) / BLOCKS
     store: dict = {}
     if not p.exists():
@@ -165,8 +135,6 @@ def load_store(d: pathlib.Path) -> dict:
 
 
 def load_hashes(d: pathlib.Path) -> set:
-    """Just the hashes already in the block store — what a writer needs to skip re-appending a block,
-    without holding the blocks themselves in memory. Empty for a fresh/legacy session."""
     p = pathlib.Path(d) / BLOCKS
     out: set = set()
     if not p.exists():
@@ -184,10 +152,6 @@ def load_hashes(d: pathlib.Path) -> set:
 
 
 def append_record(d: pathlib.Path, record, *, store=None, seen=None, ctx=None) -> None:
-    """Append one full record to a session dir in deduped form: new blocks to the block store, the
-    delta to the raw log. `seen` (a hash set), `store`, and `ctx` (the writer's keyframe state) may be
-    carried across calls by a writer so it never re-reads the sidecar and the message ref list is
-    delta-encoded; when omitted the store is loaded from disk once and each record is self-contained."""
     d = pathlib.Path(d)
     if seen is None:
         seen = set((store if store is not None else load_store(d)).keys())
@@ -205,8 +169,6 @@ def append_record(d: pathlib.Path, record, *, store=None, seen=None, ctx=None) -
 
 
 def iter_records(d: pathlib.Path):
-    """Stream every turn's full record from a session dir, reconstructing deltas via the block store
-    and passing legacy whole-body records through. One streaming pass over the raw log."""
     d = pathlib.Path(d)
     raw = d / RAW
     if not raw.exists():
@@ -225,8 +187,6 @@ def iter_records(d: pathlib.Path):
 
 
 def latest_record(d: pathlib.Path):
-    """The last turn's full record, or None. Tails the raw log so it stays cheap on a large session;
-    the block store is consulted only for the one line it reconstructs."""
     d = pathlib.Path(d)
     raw = d / RAW
     if not raw.exists():

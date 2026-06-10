@@ -1,11 +1,3 @@
-"""Materializer exact-mode gating (`materialize._exact_pins`, design/verification.md).
-
-Production now pins the per-tool number and the output thinking bucket exactly when count_tokens
-auth is present — but it must be **fail-open**: no auth ⇒ zero network calls and no pins (today's
-tiktoken+THINKING_R path). And Codex output thinking is pinned **free** from the wire
-(`reasoning_tokens`), with no count_tokens at all. count_tokens is monkeypatched, so this is
-offline.
-"""
 from __future__ import annotations
 
 from cost_xray import count_tokens, materialize

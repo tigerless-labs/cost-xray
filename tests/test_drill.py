@@ -1,5 +1,3 @@
-"""Drill-down + lazy content fetch (drill.py) — the data behind the TUI's expand:
-tool_result → per producing tool → per call → the real output text."""
 from __future__ import annotations
 
 import json
@@ -32,7 +30,7 @@ def _session(tmp_path):
         "status": 200,
     }
     (d / "raw.jsonl").write_text(json.dumps(rec) + "\n")
-    materialize_session(d)   # writes derived.jsonl
+    materialize_session(d)
     return d
 
 
@@ -64,28 +62,20 @@ def test_fetch_content_handles_system_and_missing_gracefully(tmp_path):
 
 
 def test_cost_drill_reads_per_tool_from_summary_not_derived(tmp_path):
-    # Cost drill (cat_breakdown / cat_servers) reads the pre-aggregated summary.by_cat_tool, so
-    # opening a bucket is O(categories), not a full derived re-scan. The per-tool rows must sum
-    # back to that category's summary cell, and carry the cache-$ split.
     import json as _json
 
     d = _session(tmp_path)
     sm = _json.loads((d / "summary.json").read_text())
-    g, lbl = "Messages", "system tool use+output"           # Bash tool_use + tool_result
+    g, lbl = "Messages", "system tool use+output"
     rows = drill.cat_breakdown(d, g, lbl)
     assert [r["label"] for r in rows] == ["Bash"]
     cell = sm["by_category"][f"{g}|{lbl}"]
     assert rows[0]["usd"] == pytest.approx(cell["usd"])
     assert sum(r.get("cached_usd", 0) for r in rows) == pytest.approx(cell["cached_usd"])
-    # cat_calls still reaches per-turn from derived (the only level that does)
     assert drill.cat_calls(d, g, lbl, "Bash")[0]["ref"] is not None
 
 
 def test_skill_loads_and_ads_drill_per_skill(tmp_path):
-    # The TUI's cost+context panels are data-driven, so per-skill attribution surfaces through the
-    # same drill funcs (no TUI code change): the catalog (carved from a system-role message) drills
-    # Static "Skills" per skill; the injected SKILL.md body drills Messages "Skill loads" per skill.
-    # Both must sum back to their summary cell.
     import json as _json
 
     from cost_xray import tui
@@ -114,22 +104,20 @@ def test_skill_loads_and_ads_drill_per_skill(tmp_path):
     materialize_session(d)
     sm = _json.loads((d / "summary.json").read_text())
 
-    ads = drill.cat_breakdown(d, "Static", "Skills")                  # cost panel: catalog per skill
+    ads = drill.cat_breakdown(d, "Static", "Skills")
     assert {"ascii-banner", "json-sort-keys"} <= {r["label"] for r in ads}
     assert sum(r["usd"] for r in ads) == pytest.approx(sm["by_category"]["Static|Skills"]["usd"])
 
-    loads = drill.cat_breakdown(d, "Messages", "Skill loads")         # cost panel: SKILL.md per skill
+    loads = drill.cat_breakdown(d, "Messages", "Skill loads")
     assert [r["label"] for r in loads] == ["ascii-banner"]
     assert loads[0]["usd"] == pytest.approx(sm["by_category"]["Messages|Skill loads"]["usd"])
 
     events = [e for e in (tui._latest_derived(d) or {}).get("events", []) if e["zone"] == "input"]
-    ctx = drill.ctx_breakdown(events, "Messages", "Skill loads")      # context panel: same per skill
+    ctx = drill.ctx_breakdown(events, "Messages", "Skill loads")
     assert [r["label"] for r in ctx] == ["ascii-banner"]
 
 
 def test_refold_from_derived_matches_full_build(tmp_path):
-    # A fold-only logic bump re-folds the summary from derived (no re-tokenize). The re-folded
-    # summary must reproduce the full build's categories + bill exactly (usd is stored unrounded).
     from cost_xray import materialize as M
 
     d = _session(tmp_path)
@@ -144,25 +132,21 @@ def test_refold_from_derived_matches_full_build(tmp_path):
 
 
 def test_rollup_auto_updates_project_totals_on_materialize(tmp_path):
-    # Every materialize refreshes the per-agent rollup: the session's basics + the precomputed
-    # project & agent totals (so the Home tree reads them without summing). $0 probes excluded.
     import json as _json
 
     from cost_xray import materialize as M
 
-    d = _session(tmp_path)                              # already materialized in the fixture
+    d = _session(tmp_path)
     sm = _json.loads((d / "summary.json").read_text())
     rp = d.parent / "_rollup.json"
     assert rp.exists()
     roll = _json.loads(rp.read_text())
     sid = d.name
-    assert sid in roll["sessions"]                      # this session indexed
+    assert sid in roll["sessions"]
     proj = roll["sessions"][sid]["project"] or "—"
-    # project + agent totals are precomputed and equal this one session's bill (the only real one)
     assert roll["projects"][proj]["bill"] == pytest.approx(sm["bill"])
     assert roll["totals"]["bill"] == pytest.approx(sm["bill"])
     assert roll["totals"]["n_sessions"] == 1
-    # a second materialize is idempotent (no double-count)
     M.materialize_session(d)
     roll2 = _json.loads((d.parent / "_rollup.json").read_text())
     assert roll2["totals"]["bill"] == pytest.approx(sm["bill"])
@@ -175,12 +159,9 @@ def _events(d):
 
 
 def test_ctx_breakdown_sums_back_to_the_category_cell(tmp_path):
-    # The context table drills the latest turn's in-memory events; drilling a category must
-    # sum back to that category's own total (no double-count, no orphan) — same invariant the
-    # cost drill rests on, just tokens-only over one turn.
     d = _session(tmp_path)
     events = [e for e in _events(d) if e["zone"] == "input"]
-    g, lbl = "Messages", "system tool use+output"          # Bash tool_use + tool_result
+    g, lbl = "Messages", "system tool use+output"
     rows = drill.ctx_breakdown(events, g, lbl)
     assert [r["label"] for r in rows] == ["Bash"]
     cell = sum(e.get("tokens", 0) for e in events if drill._category(e) == (g, lbl))
@@ -196,7 +177,6 @@ def test_ctx_calls_carry_refs_that_fetch_the_real_text(tmp_path):
 
 
 def test_ctx_servers_clusters_mcp_then_tools(tmp_path):
-    # An MCP category clusters by server first, then its tools (full original names).
     events = [
         {"zone": "input", "section": "messages", "bucket": "tool_use",
          "tool": "mcp__notion__search", "skill": None, "role": None, "tokens": 30, "ref": None},
@@ -210,8 +190,6 @@ def test_ctx_servers_clusters_mcp_then_tools(tmp_path):
 
 
 def test_fetch_content_reads_codex_frame_stream(tmp_path):
-    # Codex raw is a WS frame stream, not one-record-per-turn — fetch_content must
-    # reassemble it (the gap that used to break the deepest drill for Codex).
     d = tmp_path / "codex" / "sess"
     d.mkdir(parents=True)
     frames = [

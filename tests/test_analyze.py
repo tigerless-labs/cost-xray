@@ -1,9 +1,3 @@
-"""Tests for the context decomposition core (analyze.py).
-
-These are the highest-value tests: analyze() is pure, deterministic given the
-tokenizer, and encodes the product's central claim — surfacing the token cost of
-MCP servers you configured but never call.
-"""
 from __future__ import annotations
 
 from cost_xray.analyze import analyze, ntok, window_for
@@ -26,14 +20,12 @@ def test_window_for_unknown_defaults_to_200k():
     assert window_for(None) == 200_000
 
 
-
 def test_ntok_handles_none_and_types():
     assert ntok(None) == 0
     assert ntok("") == 0
     assert ntok("hello world") > 0
     assert ntok({"a": "b"}) > 0
     assert ntok(["x", "y"]) > 0
-
 
 
 def _sample_body():
@@ -109,7 +101,6 @@ def test_message_kinds_classified():
     assert all(v > 0 for v in kinds.values())
 
 
-
 def test_openai_responses_format_instructions_and_input():
     body = {
         "model": "gpt-5-codex",
@@ -123,7 +114,6 @@ def test_openai_responses_format_instructions_and_input():
     assert cats["Built-in tools"] > 0
     assert cats["Messages"] > 0
     assert r["window"] == 1_000_000
-
 
 
 def test_empty_body_does_not_crash():

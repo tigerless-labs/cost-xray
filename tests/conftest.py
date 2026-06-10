@@ -1,10 +1,3 @@
-"""Shared fixtures: a minimal fake mitmproxy `flow` so addon.py can be tested
-without running a real proxy.
-
-The addon only ever touches a small, well-defined slice of the mitmproxy flow API
-(headers, path, content, timestamp, status, body text). We model exactly that slice
-so the tests stay fast and dependency-free — addon.py imports no mitmproxy at all.
-"""
 from __future__ import annotations
 
 import json
@@ -47,7 +40,6 @@ class FakeFlow:
 
 @pytest.fixture
 def make_flow():
-    """Factory: build a FakeFlow from a request body dict (+ optional response)."""
     def _make(body=None, *, path="/v1/messages", req_headers=None,
               resp_text="", resp_headers=None, status_code=200, conn_id="abcdef0123456789",
               raw_content=None):

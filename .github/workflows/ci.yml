@@ -5,7 +5,6 @@ on:
     branches: [master]
   pull_request:
 
-# Cancel superseded runs on the same ref to save CI minutes.
 concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: true

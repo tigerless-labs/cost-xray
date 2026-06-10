@@ -1,20 +1,13 @@
-"""Pricing tests — LiteLLM as the source, hardcoded fallback (docs/local/testing.md).
-
-Modelled on codeburn's `models.test.ts`: assert relationships and invariants rather than
-brittle absolute numbers, never hit the network, and exercise the LiteLLM parse/clamp path
-by **injecting a fake `litellm` module** (so the suite runs with or without litellm
-installed). The load-bearing safety property: a bad upstream entry must never produce a
-negative or wildly inflated cost.
-"""
 from __future__ import annotations
-
-import sys
-import types
 
 import pytest
 
-from cost_xray import cost
-from cost_xray.cost import _parse_litellm_entry, _safe_rate, rates
+from cost_xray import cost, pricing_map
+from cost_xray.cost import _parse_litellm_entry, _safe_rate, rates, turn_cost
+
+
+def _use_map(monkeypatch, m):
+    monkeypatch.setattr(pricing_map, "load", lambda: m)
 
 
 def test_safe_rate_rejects_bad_and_caps_huge():
@@ -44,46 +37,76 @@ def test_parse_litellm_entry_uses_explicit_per_model_cache_costs():
     assert r["cache_write"] == pytest.approx(12.5)
 
 
-def test_rates_fallback_family_ordering():
-    assert rates("claude-haiku-4-5")["input"] < rates("claude-sonnet-4-6")["input"]
-    assert rates("claude-sonnet-4-6")["input"] < rates("claude-opus-4-8")["input"]
+def test_rates_reads_the_price_map(monkeypatch):
+    _use_map(monkeypatch, {
+        "some-new-model": {"input_cost_per_token": 2e-6, "output_cost_per_token": 8e-6},
+    })
+    r = rates("some-new-model")
+    assert r["input"] == pytest.approx(2.0) and r["output"] == pytest.approx(8.0)
+    assert r["cache_read"] == pytest.approx(0.2)
+    assert r["cache_write"] == pytest.approx(2.5)
 
 
-def test_rates_strips_1m_suffix_and_is_positive():
+def test_rates_strips_1m_suffix_and_is_positive(monkeypatch):
+    _use_map(monkeypatch, {
+        "claude-opus-4-8": {"input_cost_per_token": 5e-6, "output_cost_per_token": 2.5e-5},
+    })
     r = rates("claude-opus-4-8[1m]")
     assert r["input"] > 0 and r["output"] > 0
     assert rates("claude-opus-4-8[1m]") == rates("claude-opus-4-8")
 
 
-def test_rates_never_negative_for_any_model():
-    for m in ("claude-opus-4-8", "gpt-5-codex", "mystery-model", ""):
+def test_lookup_is_exact_not_substring(monkeypatch):
+    _use_map(monkeypatch, {
+        "gpt-4o": {"input_cost_per_token": 2.5e-6, "output_cost_per_token": 1e-5},
+    })
+    assert rates("gpt-4o-mini")["input"] != pytest.approx(2.5)
+
+
+def test_override_used_only_when_map_misses(monkeypatch):
+    _use_map(monkeypatch, {})
+    r = rates("claude-fable-5")
+    assert r["output"] > r["input"] > 0
+    assert r["cache_read"] < r["input"]
+    assert r["input"] != rates("some-unknown-model")["input"]
+
+
+def test_map_wins_over_override(monkeypatch):
+    _use_map(monkeypatch, {
+        "claude-fable-5": {"input_cost_per_token": 1e-6, "output_cost_per_token": 2e-6},
+    })
+    assert rates("claude-fable-5")["input"] == pytest.approx(1.0)
+
+
+def test_unknown_model_uses_current_default(monkeypatch):
+    _use_map(monkeypatch, {})
+    for m in ("mystery-model", "gpt-99", ""):
         r = rates(m)
-        assert r["input"] >= 0 and r["output"] >= 0
+        assert r["output"] > r["input"] > 0
+        assert r["cache_read"] < r["input"]
 
 
-def test_litellm_path_via_injected_fake_module(monkeypatch):
-    fake = types.ModuleType("litellm")
-    fake.model_cost = {
-        "some-new-model": {"input_cost_per_token": 2e-6, "output_cost_per_token": 8e-6},
-        "bad-model": {"input_cost_per_token": -5, "output_cost_per_token": 1e-6},
-    }
-    monkeypatch.setitem(sys.modules, "litellm", fake)
-    cost._LITELLM_CACHE.clear()
-    r = rates("some-new-model")
-    assert r["input"] == pytest.approx(2.0) and r["output"] == pytest.approx(8.0)
-    assert r["cache_read"] == pytest.approx(0.2)
-    assert r["cache_write"] == pytest.approx(2.5)
-    cost._LITELLM_CACHE.clear()
-    bad = rates("bad-model")
-    assert bad["input"] == cost.PRICING["opus"]["input"]
-    assert bad["output"] == cost.PRICING["opus"]["output"]
-    cost._LITELLM_CACHE.clear()
+def test_turn_cost_prices_cache_from_the_map_not_a_multiplier(monkeypatch):
+    _use_map(monkeypatch, {
+        "m": {"input_cost_per_token": 5e-6, "output_cost_per_token": 2.5e-5,
+              "cache_read_input_token_cost": 3e-7,
+              "cache_creation_input_token_cost": 9e-6},
+    })
+    r = rates("m")
+    usage = {"input_tokens": 1000, "cache_read_input_tokens": 4000,
+             "cache_creation_input_tokens": 2000, "output_tokens": 500}
+    c = turn_cost(usage, "m")
+    assert c["usd"]["cached"] == pytest.approx(4000 * r["cache_read"] / 1_000_000)
+    assert c["usd"]["rewrote"] == pytest.approx(2000 * r["cache_write"] / 1_000_000)
+    assert c["usd"]["cached"] != pytest.approx(4000 * r["input"] / 1_000_000 * cost.CACHE_READ_MULT)
 
 
-def test_litellm_lookup_is_exact_not_substring(monkeypatch):
-    fake = types.ModuleType("litellm")
-    fake.model_cost = {"gpt-4o": {"input_cost_per_token": 2.5e-6, "output_cost_per_token": 1e-5}}
-    monkeypatch.setitem(sys.modules, "litellm", fake)
-    cost._LITELLM_CACHE.clear()
-    assert rates("gpt-4o-mini")["input"] != 2.5e-6 * 1_000_000
-    cost._LITELLM_CACHE.clear()
+def test_bundled_snapshot_loads_and_prices_opus(monkeypatch, tmp_path):
+    monkeypatch.setattr(pricing_map, "_cache_file", lambda: tmp_path / "absent.json")
+    monkeypatch.setattr(pricing_map, "_fetch", lambda: (_ for _ in ()).throw(OSError("offline")))
+    pricing_map.reset()
+    assert "claude-opus-4-8" in pricing_map.load()
+    r = rates("claude-opus-4-8")
+    assert r["input"] > 0 and r["output"] > r["input"]
+    assert r["cache_read"] < r["input"]
+    pricing_map.reset()

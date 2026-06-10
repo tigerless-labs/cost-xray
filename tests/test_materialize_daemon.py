@@ -1,7 +1,3 @@
-"""Materializer one-shot sweep — disk-driven discovery + per-turn materialize, decoupled from the TUI
-(docs/design/read-layer.md, ops.md). The capture proxy spawns this module per captured turn; each run
-sweeps every session whose raw is newer than its summary, then exits (no poll loop). A per-session
-lock serializes concurrent materializes. Framework-free."""
 from __future__ import annotations
 
 import fcntl
@@ -32,14 +28,12 @@ def _write_session(d, content="hello world, list the files please"):
 
 def test_stale_until_materialized(tmp_path):
     d = _write_session(tmp_path / "claude" / "s1")
-    assert d in set(daemon.stale_sessions(tmp_path))     # raw, no summary → stale
+    assert d in set(daemon.stale_sessions(tmp_path))
     materialize_session(d)
-    assert d not in set(daemon.stale_sessions(tmp_path))  # summary now fresh → not stale
+    assert d not in set(daemon.stale_sessions(tmp_path))
 
 
 def test_sweep_makes_raw_only_session_discoverable(tmp_path):
-    # the discovery fix: a never-opened session gets a summary from the daemon alone, so Home's
-    # rollup (built from summaries) will list it — no TUI interaction required.
     d = _write_session(tmp_path / "claude" / "s1")
     assert not (d / "summary.json").exists()
     done = daemon.sweep_once(tmp_path)
@@ -51,38 +45,70 @@ def test_sweep_makes_raw_only_session_discoverable(tmp_path):
 def test_sweep_skips_already_fresh(tmp_path):
     _write_session(tmp_path / "claude" / "s1")
     daemon.sweep_once(tmp_path)
-    assert daemon.sweep_once(tmp_path) == []             # nothing stale on the second pass
+    assert daemon.sweep_once(tmp_path) == []
 
 
 def test_per_session_lock_skips_work_when_held(tmp_path):
     d = _write_session(tmp_path / "claude" / "s1")
     lf = (d / ".materialize.lock").open("w")
-    fcntl.flock(lf, fcntl.LOCK_EX)                       # another process is materializing
+    fcntl.flock(lf, fcntl.LOCK_EX)
     try:
-        assert materialize_session(d) is None           # contended → skip
-        assert not (d / "summary.json").exists()        # no work done while locked
+        assert materialize_session(d) is None
+        assert not (d / "summary.json").exists()
     finally:
         fcntl.flock(lf, fcntl.LOCK_UN)
         lf.close()
-    assert materialize_session(d) is not None           # lock free → materializes
+    assert materialize_session(d) is not None
     assert (d / "summary.json").exists()
 
 
 def test_main_runs_one_sweep_and_exits(tmp_path):
-    # the manual CLI is a one-shot: materialize once, return, no loop.
     d = _write_session(tmp_path / "claude" / "s1")
-    daemon.main(["--root", str(tmp_path)])              # returns (no perpetual poll to stop)
+    daemon.main(["--root", str(tmp_path)])
     assert (d / "summary.json").exists()
-    assert not hasattr(daemon, "run")                  # the polling loop is gone
+    assert not hasattr(daemon, "run")
 
 
 def test_watch_sweeps_on_signal_then_exits_on_eof(tmp_path):
-    # the warm watcher: block for a turn's wake byte on its input, sweep every stale session, repeat;
-    # exit at EOF (the proxy closed the pipe). No polling — it does nothing until signalled.
     d = _write_session(tmp_path / "claude" / "s1")
     r, w = os.pipe()
-    os.write(w, b"\n")                                  # one turn signalled
-    os.close(w)                                         # then close → watch sweeps once, hits EOF, returns
+    os.write(w, b"\n")
+    os.close(w)
     with os.fdopen(r, "rb", buffering=0) as reader:
-        daemon.watch(reader, root=tmp_path)             # runs in-thread; returns (does not block forever)
-    assert (d / "summary.json").exists()                # the signalled turn was materialized
+        daemon.watch(reader, root=tmp_path)
+    assert (d / "summary.json").exists()
+
+
+def _write_broken(agent_dir, sid, n_turns=3):
+    d = agent_dir / sid
+    d.mkdir(parents=True, exist_ok=True)
+    (d / "meta.json").write_text(json.dumps(
+        {"session_id": sid, "agent": agent_dir.name, "n_turns": n_turns}))
+    return d
+
+
+def test_sweep_flags_capture_broken_sessions_in_rollup(tmp_path):
+    agent = tmp_path / "claude"
+    _write_broken(agent, "s-broken")
+    _write_session(agent / "s-ok")
+    daemon.sweep_once(tmp_path)
+    roll = json.loads((agent / "_rollup.json").read_text())
+    assert roll["broken"] == ["s-broken"]
+
+
+def test_sweep_clears_broken_flag_once_raw_appears(tmp_path):
+    agent = tmp_path / "claude"
+    d = _write_broken(agent, "s-heals")
+    daemon.sweep_once(tmp_path)
+    assert json.loads((agent / "_rollup.json").read_text())["broken"] == ["s-heals"]
+    _write_session(d)
+    daemon.sweep_once(tmp_path)
+    assert json.loads((agent / "_rollup.json").read_text())["broken"] == []
+
+
+def test_zero_turn_meta_is_not_flagged(tmp_path):
+    agent = tmp_path / "claude"
+    _write_broken(agent, "s-empty", n_turns=0)
+    _write_session(agent / "s-ok")
+    daemon.sweep_once(tmp_path)
+    assert json.loads((agent / "_rollup.json").read_text())["broken"] == []

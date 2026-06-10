@@ -1,23 +1,3 @@
-"""OpenAI / Codex adapter: WebSocket Responses frames → canonical `Event[]` (design.md §3, §9).
-
-Verified against real capture. Codex's model call is an OpenAI-**Responses** payload carried
-over a WebSocket to `chatgpt.com/backend-api/codex/responses` (design.md §3): `raw.jsonl` is a
-**frame stream**, not one-record-per-turn. So this adapter has two parts:
-
-- `iter_turns(frames)` — reassemble the frames into per-turn records (a `response.create`
-  request … its `response.completed` usage, with the streamed output items in between).
-- `to_events(turn, i)` — decompose one reassembled turn, mirroring the Anthropic adapter:
-  `instructions → system`, `tools → schema`, `input → messages`, `output → generation`, with
-  `message → text`, `reasoning → thinking`, `function_call → tool_use`,
-  `function_call_output → tool_result`.
-
-**Verified quirks:** tool name is top-level `name` (not `function.name`); some builtins
-(`web_search`, `tool_search`, `image_generation`) have `name=None` → fall back to `type`; MCP
-tools use the **same** `mcp__<server>__<tool>` convention as Anthropic; and — crucially —
-Codex keeps history **server-side** (`previous_response_id`/`store`), so each turn's `input`
-carries only the NEW items (`instructions`+`tools` are re-sent, the message history is not). See
-design.md §3 for what that means for Messages attribution.
-"""
 from __future__ import annotations
 
 import json
@@ -32,9 +12,6 @@ _CWD_RE = re.compile(r"(?:working directory:|<cwd>)\s*(/[^\s\"'<,\\]+)", re.I)
 
 
 def project_name(records):
-    """The project the session ran in — the **full cwd path** carried in Codex's instructions /
-    environment context (like CodeBurn: the literal cwd, not a guessed git root). The TUI shows its
-    basename. `None` if absent."""
     for rec in records[:200]:
         m = _CWD_RE.search(json.dumps(rec, ensure_ascii=False))
         if m:
@@ -43,8 +20,6 @@ def project_name(records):
 
 
 def session_name(records):
-    """A human session label: the **first user message** (truncated), from the first
-    `response.create` frame's `input`. `None` if absent (caller falls back to the session id)."""
     for rec in records:
         fr = _frame(rec) if isinstance(rec, dict) else None
         if not (isinstance(fr, dict) and fr.get("type") == "response.create"):
@@ -65,21 +40,7 @@ THINKING_R = 1.0
 INCREMENTAL = False
 
 
-
 def iter_turns(frames):
-    """Group a Codex WS frame stream (raw.jsonl records) into per-turn dicts:
-    `{model, path, instructions, tools, input, new_input, output, usage}`. A turn spans a
-    `response.create` … its `response.completed`.
-
-    **History reconstruction (design.md §3).** Codex keeps the conversation server-side
-    (`previous_response_id`/`store`), so each `response.create` carries only the NEW input.
-    We accumulate a running `history` of prior user/tool input plus visible assistant output,
-    and set each turn's `input` to `history + new_input`. A `compaction` input item resets the
-    reconstructed history: compacted server state is opaque on the wire, so carrying the old
-    pre-compact tool results would massively over-attribute later turns. Reasoning output is
-    not carried into reconstructed input: reasoning tokens are output-side work, and carrying
-    the visible reasoning item would make prior-turn thinking appear as `Messages/thinking`.
-    `new_input` keeps the wire's actual delta for reference."""
     turns, cur, history = [], None, []
     for r in frames:
         if not isinstance(r, dict):
@@ -120,12 +81,6 @@ def iter_turns(frames):
 
 
 def _carryable_output(output):
-    """Visible assistant output to reconstruct server-side message history.
-
-    Reasoning items may be present in the response output stream, but treating them as
-    ordinary carried message history would turn output thinking into next-turn input
-    thinking. We leave those out unless they appear explicitly in a later wire `input`.
-    """
     return [item for item in (output or [])
             if not (isinstance(item, dict) and item.get("type") == "reasoning")]
 
@@ -146,9 +101,7 @@ def _frame(record):
     return fr
 
 
-
 def to_events(turn, i=0):
-    """Decompose one reassembled turn (from `iter_turns`) into canonical events."""
     out = []
     if not isinstance(turn, dict):
         return out
@@ -177,16 +130,10 @@ def to_events(turn, i=0):
 
 
 def response_blocks(turn):
-    """The turn's output items — the Codex analogue of Anthropic `response_blocks`. Public
-    accessor for the verification layer; the read path goes through `to_events`."""
     return (turn.get("output") if isinstance(turn, dict) else None) or []
 
 
 def raw_units(turn):
-    """Verification contract (verify.coverage): `[(coord, content)]` for every countable raw unit,
-    with `coord` matching the `ref` `to_events` assigns and `content` the exact value it tokenises
-    — so `Σ ntok(_count_content(content))` equals `Σ` the events' tokens unit-for-unit. Mirrors
-    `to_events` / `_item_events` exactly (the only Codex-specific piece completeness needs)."""
     if not isinstance(turn, dict):
         return []
     units = []
@@ -203,8 +150,6 @@ def raw_units(turn):
 
 
 def _item_units(item, base):
-    """The `(coord, content)` unit(s) one Responses item contributes — the inverse of
-    `_item_events`, yielding the same content it tokenises (so the token recount is exact)."""
     if not isinstance(item, dict):
         return [(base, item)]
     t = item.get("type")
@@ -291,7 +236,6 @@ def _reasoning_text(item):
 
 
 def window(record):
-    """Codex/OpenAI window from the model name (gpt-5 / codex → 1M)."""
     m = _model(record).lower()
     if "gpt-5" in m or "codex" in m:
         return 1_000_000
@@ -299,11 +243,6 @@ def window(record):
 
 
 def usage(record):
-    """OpenAI/Responses `usage` → canonical. No write premium; `input_tokens` INCLUDES the
-    cached part (`input_tokens_details.cached_tokens`), so subtract for `fresh`. `output_tokens`
-    INCLUDES the (opaque, encrypted) reasoning — exposed exactly as
-    `output_tokens_details.reasoning_tokens`, carried through so the read layer pins the output
-    thinking bucket from the wire (the visible reasoning items are empty; verification.md)."""
     u = (record.get("usage") if isinstance(record, dict) else None) or {}
     cached = _int(u.get("cached_tokens")
                   or (u.get("input_tokens_details") or {}).get("cached_tokens")
@@ -317,17 +256,11 @@ def usage(record):
 
 
 def output_thinking(record):
-    """Exact output-thinking tokens from the wire `usage` (reasoning_tokens) — the Codex output
-    thinking-pin, free and offline. None when absent (caller falls back). The Anthropic adapter has
-    no such field, so it doesn't define this and the registry returns None there."""
     r = usage(record).get("output_reasoning") or 0
     return r if r > 0 else None
 
 
 def locate(records, ref):
-    """Reverse of `to_events`: the raw item a `ref` points at, for the TUI's lazy content
-    fetch. Codex raw is a WS frame stream, so we reassemble turns first (the same way the
-    materializer did) and index into one. Codex-specific, so it lives here, not in `drill`."""
     turns = iter_turns(records)
     t = ref.get("turn") if isinstance(ref, dict) else None
     if not isinstance(t, int) or not 0 <= t < len(turns):

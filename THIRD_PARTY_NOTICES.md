@@ -11,6 +11,13 @@ license requires that its copyright and permission notice be retained; see the u
 [LICENSE](https://github.com/chouzz/llm-interceptor/blob/master/LICENSE) for the authoritative
 text.
 
+## Vendored data
+
+**litellm** — https://github.com/BerriAI/litellm — MIT License, © BerriAI. We bundle a snapshot of
+its `model_prices_and_context_window.json` price map as the offline pricing source (the package
+itself is not a dependency) and refresh it at runtime from the upstream copy. Its MIT license is
+retained; see the upstream [LICENSE](https://github.com/BerriAI/litellm/blob/main/LICENSE).
+
 ## Runtime dependencies
 
 These are installed from PyPI and ship under their own licenses (not vendored here); listed for
@@ -20,4 +27,3 @@ transparency:
   including the local CA used for locked-endpoint agents.
 - **tiktoken** — https://github.com/openai/tiktoken — MIT License.
 - **rich** / **textual** — https://github.com/Textualize — MIT License.
-- **litellm** (optional, pricing) — https://github.com/BerriAI/litellm — MIT License.

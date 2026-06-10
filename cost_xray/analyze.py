@@ -1,15 +1,3 @@
-"""Decompose a captured LLM request into context sources.
-
-Input: the parsed JSON body of an Anthropic /v1/messages or OpenAI-style request
-(captured by the mitmproxy addon). Output: a report with per-source token counts,
-per-MCP-server breakdown, and which tools were actually used — so we can flag
-"configured but never used" MCP servers (the dead-weight cost no log-based tool
-sees, because tool schemas are not in the logs).
-
-Tokenizer: tiktoken o200k_base. Exact for OpenAI/Codex; an approximation for
-Claude (whose tokenizer is private) — totals are calibrated against the response
-`usage` when available.
-"""
 from __future__ import annotations
 
 import hashlib
@@ -73,7 +61,6 @@ def _tool_name(t: dict) -> str:
 
 
 def analyze(body: dict) -> dict:
-    """Return a decomposition report for one captured request body."""
     model = body.get("model", "")
     system = body.get("system")
     if system is None:
