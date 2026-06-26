@@ -494,8 +494,12 @@ class DetailScreen(Screen):
                              f"${gt[2]:.2f}", f"${gt[3]:.2f}", "—"]
         self._cost.refresh()
 
+    @staticmethod
+    def _is_static(e):
+        return ev.category(e)[0] == "Static"
+
     def _latest_input_events(self):
-        line = tui._latest_derived(self.dirs[0]) or {}
+        line = tui._latest_main_derived(self.dirs[0], self._is_static) or {}
         win = line.get("window") or 1
         return [e for e in line.get("events", []) if e.get("zone") == "input"], win
 
@@ -536,6 +540,12 @@ class DetailScreen(Screen):
             g, lbl = ev.category(e)
             if g in ("Static", "Messages"):
                 cats[(g, lbl)] += e.get("tokens", 0)
+        present = set(cats)
+        for key in [k for k in self._ctx_nodes if isinstance(k, tuple) and k not in present]:
+            cnode = self._ctx_nodes.pop(key)
+            gnode = self._ctx_nodes.get(key[0])
+            if gnode is not None and cnode in gnode.children:
+                gnode.children.remove(cnode)
         groups, total = defaultdict(dict), 0.0
         for (g, lbl), tok in cats.items():
             groups[g][lbl] = tok
@@ -543,6 +553,9 @@ class DetailScreen(Screen):
         for g in ("Static", "Messages"):
             gcats = groups.get(g)
             if not gcats:
+                gnode = self._ctx_nodes.pop(g, None)
+                if gnode is not None and gnode in self._ctx_roots:
+                    self._ctx_roots.remove(gnode)
                 continue
             gnode = self._ctx_nodes.get(g)
             if gnode is None:

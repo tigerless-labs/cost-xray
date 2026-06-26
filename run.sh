@@ -73,7 +73,7 @@ _serve() {
   mkdir -p "$STATE"
   # shellcheck disable=SC1090
   [ -f "$ENVFILE" ] && . "$ENVFILE"
-  local pref="${PORT:-$DEFAULT_PORT}"
+  local pref; pref="$(cat "$PORTFILE" 2>/dev/null || echo "${PORT:-$DEFAULT_PORT}")"
   local up="${UPSTREAM:-$DEFAULT_UPSTREAM}"
   local md="${MITMDUMP:-$VENV_MITM}"
   local chosen
@@ -89,7 +89,7 @@ _serve_codex() {
   mkdir -p "$STATE"
   # shellcheck disable=SC1090
   [ -f "$ENVFILE" ] && . "$ENVFILE"
-  local pref="${CODEX_PORT:-$DEFAULT_CODEX_PORT}"
+  local pref; pref="$(cat "$CODEX_PORTFILE" 2>/dev/null || echo "${CODEX_PORT:-$DEFAULT_CODEX_PORT}")"
   local md="${MITMDUMP:-$VENV_MITM}"
   local chosen
   if ! chosen="$(_pick_port "$pref")"; then

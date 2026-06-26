@@ -48,6 +48,78 @@ def test_latest_request_reads_last_raw_jsonl_line(tmp_path):
     assert tui._latest_request(d) == {"model": "newest"}
 
 
+def test_ensure_fresh_caps_concurrent_materialize(tmp_path, monkeypatch):
+    import threading
+
+    gate = threading.Event()
+    started = []
+
+    def blocking_materialize(d):
+        started.append(d)
+        gate.wait(5)
+
+    monkeypatch.setattr(tui, "materialize_session", blocking_materialize)
+    monkeypatch.setattr(tui, "_MAT_THREADS", {})
+    monkeypatch.setattr(tui, "_MAT_CAP", 2)
+
+    dirs = []
+    for i in range(6):
+        d = tmp_path / f"s{i}"
+        d.mkdir()
+        (d / "raw.jsonl").write_text("x")
+        dirs.append(d)
+
+    try:
+        for d in dirs:
+            tui._ensure_fresh(d)
+        alive = sum(1 for t in tui._MAT_THREADS.values() if t.is_alive())
+        assert alive <= 2
+        assert len(started) <= 2
+    finally:
+        gate.set()
+        for t in list(tui._MAT_THREADS.values()):
+            t.join(5)
+
+
+def test_latest_main_derived_picks_compacted_mainline_over_sidecalls(tmp_path):
+    d = tmp_path / "claude" / "sess"
+    d.mkdir(parents=True)
+
+    def is_static(e):
+        return e.get("section") == "static"
+
+    def scaffold():
+        return [{"zone": "input", "section": "static", "bucket": "system", "tokens": 100},
+                {"zone": "input", "section": "static", "bucket": "schema", "tool": "Agent",
+                 "tokens": 300}]
+
+    def msgs(n):
+        return [{"zone": "input", "section": "messages", "bucket": "text", "role": "user",
+                 "tokens": 50} for _ in range(n)]
+
+    lines = [
+        {"turn": 1, "window": 1000, "events": scaffold() + msgs(10)},
+        {"turn": 2, "window": 1000, "events": scaffold() + msgs(20)},
+        {"turn": 3, "window": 1000, "events": scaffold() + msgs(1)},
+        {"turn": 4, "window": 1000, "events":
+            [{"zone": "input", "section": "static", "bucket": "system", "tokens": 20},
+             {"zone": "input", "section": "messages", "bucket": "text", "role": "user",
+              "tokens": 30}]},
+    ]
+    with (d / "derived.jsonl").open("w") as f:
+        for o in lines:
+            f.write(json.dumps(o) + "\n")
+
+    def total(line):
+        return sum(e["tokens"] for e in line["events"] if e["zone"] == "input")
+
+    assert tui._tail_records(d / "derived.jsonl")[-1]["turn"] == 4
+    picked = tui._latest_main_derived(d, is_static)
+    assert picked["turn"] == 3
+    assert total(picked) < total(lines[1])
+    assert total(picked) > total(lines[3])
+
+
 def test_report_for_runs_analysis_on_latest_request(tmp_path):
     body = {
         "model": "claude-opus-4-8",

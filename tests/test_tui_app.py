@@ -269,7 +269,7 @@ def test_detail_renders_cost_above_context(monkeypatch, tmp_path):
 
     monkeypatch.setattr(tui, "_sessions", lambda: [])
     monkeypatch.setattr(tui, "_summary", lambda d: _summary(**{"Static__System prompt": 0.1}))
-    monkeypatch.setattr(tui, "_latest_derived", lambda d: {"window": 1000, "events": []})
+    monkeypatch.setattr(tui, "_latest_main_derived", lambda d, s=None: {"window": 1000, "events": []})
 
     async def go():
         app = XrayApp()
@@ -295,7 +295,7 @@ def test_context_table_drills_to_mcp_server(monkeypatch, tmp_path):
         {"zone": "input", "section": "messages", "bucket": "tool_use",
          "tool": "mcp__notion__search", "skill": None, "role": None, "tokens": 200, "ref": None},
     ]}
-    monkeypatch.setattr(tui, "_latest_derived", lambda d: line)
+    monkeypatch.setattr(tui, "_latest_main_derived", lambda d, s=None: line)
 
     async def go():
         app = XrayApp()
@@ -310,6 +310,64 @@ def test_context_table_drills_to_mcp_server(monkeypatch, tmp_path):
             assert [s.label for s in servers] == ["notion"]
             tools = servers[0].loader()
             assert [t.label for t in tools] == ["mcp__notion__search"]
+
+    asyncio.run(go())
+
+
+def test_context_tree_prunes_categories_dropped_by_compaction(monkeypatch, tmp_path):
+    from cost_xray import events as ev
+    from cost_xray import tui
+    from cost_xray.tui_app import DetailScreen, XrayApp
+
+    def evt(section, bucket, tok, **kw):
+        return {"zone": "input", "section": section, "bucket": bucket, "tool": kw.get("tool"),
+                "skill": None, "role": kw.get("role"), "tokens": tok, "ref": None}
+
+    full = {"window": 1000, "events": [
+        evt("static", "system", 100),
+        evt("messages", "text", 40, role="user"),
+        evt("messages", "thinking", 200),
+        evt("messages", "tool_use", 80, tool="Bash")]}
+    compacted = {"window": 1000, "events": [
+        evt("static", "system", 100),
+        evt("messages", "text", 30, role="user")]}
+    static_only = {"window": 1000, "events": [evt("static", "system", 100)]}
+
+    monkeypatch.setattr(tui, "_sessions", lambda: [])
+    monkeypatch.setattr(tui, "_summary", lambda d: _summary(**{"Static__System prompt": 0.1}))
+    state = {"line": full}
+    monkeypatch.setattr(tui, "_latest_main_derived", lambda d, s=None: state["line"])
+
+    def cats_of(line):
+        c = {}
+        for e in line["events"]:
+            g, lbl = ev.category(e)
+            if g in ("Static", "Messages"):
+                c[(g, lbl)] = c.get((g, lbl), 0) + e["tokens"]
+        return c
+
+    async def go():
+        app = XrayApp()
+        async with app.run_test():
+            screen = DetailScreen([tmp_path], "claude", "detail", show_context=True)
+            await app.push_screen(screen)
+            await app.workers.wait_for_complete()
+
+            def tree_cats():
+                return {k for k in screen._ctx_nodes if isinstance(k, tuple)}
+
+            assert tree_cats() == set(cats_of(full))
+
+            state["line"] = compacted
+            screen._refresh_context()
+            assert tree_cats() == set(cats_of(compacted))
+            assert ("Messages", "thinking") not in screen._ctx_nodes
+            assert screen._ctx.footer[2] == tui._h(int(sum(cats_of(compacted).values())))
+
+            state["line"] = static_only
+            screen._refresh_context()
+            assert {n.label for n in screen._ctx_roots} == {"Static"}
+            assert screen._ctx.footer[2] == tui._h(int(sum(cats_of(static_only).values())))
 
     asyncio.run(go())
 

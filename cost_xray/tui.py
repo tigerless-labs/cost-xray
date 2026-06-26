@@ -87,6 +87,8 @@ def _report_for(d: pathlib.Path) -> dict | None:
 
 _SUMMARY_CACHE: dict = {}
 _MAT_THREADS: dict = {}
+_MAT_CAP = 2
+_MAT_LOCK = threading.Lock()
 
 
 def _safe_materialize(d: pathlib.Path) -> None:
@@ -107,13 +109,16 @@ def _ensure_fresh(d: pathlib.Path) -> None:
         return
     if raw_mt <= sum_mt:
         return
-    t = _MAT_THREADS.get(str(d))
-    if t is not None and t.is_alive():
-        return
-    th = threading.Thread(target=_safe_materialize, args=(d,),
-                          name="cost-xray-materialize", daemon=True)
-    _MAT_THREADS[str(d)] = th
-    th.start()
+    with _MAT_LOCK:
+        t = _MAT_THREADS.get(str(d))
+        if t is not None and t.is_alive():
+            return
+        if sum(1 for x in _MAT_THREADS.values() if x.is_alive()) >= _MAT_CAP:
+            return
+        th = threading.Thread(target=_safe_materialize, args=(d,),
+                              name="cost-xray-materialize", daemon=True)
+        _MAT_THREADS[str(d)] = th
+        th.start()
 
 
 _ROLLUP_CACHE: dict = {}
@@ -185,6 +190,66 @@ def _latest_derived(d: pathlib.Path):
         return None
     except Exception:
         return None
+
+
+_MAIN_CACHE: dict = {}
+_MAIN_FRAC = 0.5
+_MAIN_TAIL_BYTES = 8_000_000
+
+
+def _tail_records(p: pathlib.Path, max_bytes: int = _MAIN_TAIL_BYTES):
+    with p.open("rb") as f:
+        f.seek(0, 2)
+        start = max(0, f.tell() - max_bytes)
+        f.seek(start)
+        data = f.read()
+    parts = data.split(b"\n")
+    if start:
+        parts = parts[1:]
+    out = []
+    for ln in parts:
+        ln = ln.strip()
+        if not ln:
+            continue
+        try:
+            out.append(json.loads(ln))
+        except Exception:
+            continue
+    return out
+
+
+def _input_static_tokens(rec, is_static) -> int:
+    return sum(e.get("tokens", 0) for e in rec.get("events", [])
+               if e.get("zone") == "input" and is_static(e))
+
+
+def _pick_main_line(recs, is_static):
+    if not recs:
+        return None
+    scored = [(r, _input_static_tokens(r, is_static)) for r in recs]
+    scaffold = max(s for _, s in scored)
+    if scaffold <= 0:
+        return recs[-1]
+    thresh = _MAIN_FRAC * scaffold
+    for r, s in reversed(scored):
+        if s >= thresh:
+            return r
+    return recs[-1]
+
+
+def _latest_main_derived(d, is_static):
+    p = pathlib.Path(d) / "derived.jsonl"
+    try:
+        st = p.stat()
+    except OSError:
+        return None
+    key = str(p)
+    c = _MAIN_CACHE.get(key)
+    if c is not None and c[0] == st.st_mtime_ns and c[1] == st.st_size:
+        return c[2]
+    line = _pick_main_line(_tail_records(p), is_static)
+    _MAIN_CACHE[key] = (st.st_mtime_ns, st.st_size, line)
+    return line
 
 
 def _split(key):
