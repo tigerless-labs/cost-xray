@@ -3,10 +3,7 @@
 <p align="center"><strong>See what your AI coding agent actually sends to the API — and what each part costs.</strong></p>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/agents-Claude%20Code%20%C2%B7%20Codex-brightgreen.svg" alt="agents" />
-  <img src="https://img.shields.io/badge/capture-mitmproxy-blue.svg" alt="capture" />
-  <img src="https://img.shields.io/badge/local--only-no%20telemetry-success.svg" alt="local only" />
-  <img src="https://img.shields.io/badge/license-MIT-yellow.svg" alt="license MIT" />
+  <img src="https://img.shields.io/badge/agents-Claude%20Code%20%C2%B7%20Codex-brightgreen.svg" alt="agents" /> <img src="https://img.shields.io/badge/capture-mitmproxy-blue.svg" alt="capture" /> <img src="https://img.shields.io/badge/local--only-no%20telemetry-success.svg" alt="local only" /> <img src="https://img.shields.io/badge/license-MIT-yellow.svg" alt="license MIT" />
 </p>
 
 Most usage tools read local logs. That shows the total cost of a call or session, but it misses the request-time context assembled before the model is invoked: system prompts, tool schemas, MCP blocks, tool results, cache reads/writes, and previous thinking blocks.
