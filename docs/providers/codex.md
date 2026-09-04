@@ -40,6 +40,23 @@ Remote permits only one live app-server for a registered Mac. If ChatGPT desktop
 Remote on the managed daemon. The desktop app and the managed daemon are separate live backends;
 sharing Codex's on-disk thread history does not make them the same running agent process.
 
+For terminal sessions that must stay visible and controllable from a paired phone, use the shared
+daemon instead of launching a separate local Codex process:
+
+```sh
+cx remote
+```
+
+Pass normal Codex arguments after the command, for example `cx remote resume <thread-id>`. The first
+run prepares the daemon under Xray, enables Remote, and connects the terminal over Codex's default
+Unix control socket. Later terminals reuse that daemon without restarting it. `cx codex-shared` is
+an equivalent, more explicit alias.
+
+If ChatGPT desktop still owns Remote, `cx remote` stops with the exact setting to disable. After the
+managed daemon becomes the sole Remote owner, the terminal and phone are clients of the same
+app-server and can observe or steer the same live thread. A plain `codex` command still starts its
+own writer, so use `cx remote` for work you expect to continue from your phone.
+
 ## Storage format
 
 `raw.jsonl` is **one frame per line**, appended in real time as the WebSocket delivers them — not a

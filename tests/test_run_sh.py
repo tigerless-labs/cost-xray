@@ -76,6 +76,7 @@ def test_macos_install_writes_launchagent_and_wrapper(tmp_path):
     assert "bootstrap" in log.read_text()
     rc = (home / ".zshrc").read_text()
     assert "# >>> cost-xray >>>" in rc and "claude()" in rc and "cx()" in rc
+    assert "remote|codex-shared)" in rc
     assert not (home / ".bashrc").exists()
     assert not (home / ".config" / "systemd").exists()
 
@@ -129,13 +130,27 @@ def test_codex_daemon_restart_runs_managed_binary_through_proxy(tmp_path):
     )
     ca = state / "codex-ca-bundle.pem"
     ca.write_text("test CA")
+    daemon_dir = home / ".codex" / "app-server-daemon"
+    daemon_dir.mkdir(parents=True)
+    daemon_pid = daemon_dir / "app-server.pid"
+    daemon_pid.write_text('{"pid":1234}')
+    socket_dir = Path(tempfile.mkdtemp(prefix="cx-socket-", dir="/tmp"))
+    socket_path = socket_dir / "app.sock"
+    unix_listener = socket.socket(socket.AF_UNIX)
+    unix_listener.bind(str(socket_path))
+    unix_listener.listen()
 
     listener = socket.socket()
     listener.bind(("127.0.0.1", 0))
     listener.listen()
     port = listener.getsockname()[1]
     (state / "codex-port").write_text(str(port))
-    env = dict(os.environ, HOME=str(home), CODEX_TEST_LOG=str(log))
+    env = dict(
+        os.environ,
+        HOME=str(home),
+        CODEX_TEST_LOG=str(log),
+        CODEX_CONTROL_SOCKET=str(socket_path),
+    )
     try:
         result = subprocess.run(
             ["bash", str(RUN_SH), "codex-daemon-restart"],
@@ -145,6 +160,8 @@ def test_codex_daemon_restart_runs_managed_binary_through_proxy(tmp_path):
         )
     finally:
         listener.close()
+        unix_listener.close()
+        shutil.rmtree(socket_dir, ignore_errors=True)
 
     assert result.returncode == 0, result.stderr
     expected_proxy = f"http://127.0.0.1:{port}"
@@ -153,6 +170,105 @@ def test_codex_daemon_restart_runs_managed_binary_through_proxy(tmp_path):
     assert lines[-1] == (
         f"{expected_proxy}|{expected_proxy}|{ca}|{ca}|{ca}|app-server daemon start"
     )
+    assert (state / "codex-daemon-xray.pid").read_text() == daemon_pid.read_text()
+
+
+def test_codex_remote_prepares_daemon_once_then_attaches_to_shared_socket(tmp_path):
+    home = tmp_path / "home"
+    state = home / ".cost-xray"
+    state.mkdir(parents=True)
+    managed = home / ".codex" / "packages" / "standalone" / "current" / "codex"
+    managed.parent.mkdir(parents=True)
+    daemon_dir = home / ".codex" / "app-server-daemon"
+    daemon_dir.mkdir(parents=True)
+    daemon_pid = daemon_dir / "app-server.pid"
+    daemon_pid.write_text('{"pid":1234}')
+    socket_dir = Path(tempfile.mkdtemp(prefix="cx-socket-", dir="/tmp"))
+    socket_path = socket_dir / "app.sock"
+    unix_listener = socket.socket(socket.AF_UNIX)
+    unix_listener.bind(str(socket_path))
+    unix_listener.listen()
+    log = tmp_path / "codex.log"
+    _fake(managed.parent, "codex", 'printf "%s\\n" "$*" >> "$CODEX_TEST_LOG"')
+    ca = state / "codex-ca-bundle.pem"
+    ca.write_text("test CA")
+
+    proxy_listener = socket.socket()
+    proxy_listener.bind(("127.0.0.1", 0))
+    proxy_listener.listen()
+    (state / "codex-port").write_text(str(proxy_listener.getsockname()[1]))
+    env = dict(
+        os.environ,
+        HOME=str(home),
+        CODEX_TEST_LOG=str(log),
+        CODEX_CONTROL_SOCKET=str(socket_path),
+    )
+    try:
+        first = subprocess.run(
+            ["bash", str(RUN_SH), "codex-remote", "resume", "thread-123"],
+            env=env,
+            capture_output=True,
+            text=True,
+        )
+        second = subprocess.run(
+            ["bash", str(RUN_SH), "codex-remote", "resume", "thread-456"],
+            env=env,
+            capture_output=True,
+            text=True,
+        )
+    finally:
+        proxy_listener.close()
+        unix_listener.close()
+        shutil.rmtree(socket_dir, ignore_errors=True)
+
+    assert first.returncode == 0, first.stderr
+    assert second.returncode == 0, second.stderr
+    lines = log.read_text().splitlines()
+    assert lines == [
+        "app-server daemon stop",
+        "remote-control start --json",
+        f"--remote unix://{socket_path} resume thread-123",
+        "remote-control start --json",
+        f"--remote unix://{socket_path} resume thread-456",
+    ]
+    assert (state / "codex-daemon-xray.pid").read_text() == daemon_pid.read_text()
+
+
+def test_codex_remote_explains_desktop_remote_conflict(tmp_path):
+    home = tmp_path / "home"
+    state = home / ".cost-xray"
+    state.mkdir(parents=True)
+    managed = home / ".codex" / "packages" / "standalone" / "current" / "codex"
+    managed.parent.mkdir(parents=True)
+    log = tmp_path / "codex.log"
+    _fake(
+        managed.parent,
+        "codex",
+        'printf "%s\\n" "$*" >> "$CODEX_TEST_LOG"; '
+        '[ "$*" != "remote-control start --json" ]',
+    )
+    ca = state / "codex-ca-bundle.pem"
+    ca.write_text("test CA")
+
+    proxy_listener = socket.socket()
+    proxy_listener.bind(("127.0.0.1", 0))
+    proxy_listener.listen()
+    (state / "codex-port").write_text(str(proxy_listener.getsockname()[1]))
+    env = dict(os.environ, HOME=str(home), CODEX_TEST_LOG=str(log))
+    try:
+        result = subprocess.run(
+            ["bash", str(RUN_SH), "codex-remote"],
+            env=env,
+            capture_output=True,
+            text=True,
+        )
+    finally:
+        proxy_listener.close()
+
+    assert result.returncode == 1
+    assert "Settings > Connections > Control this Mac" in result.stderr
+    assert "app-server daemon stop" in log.read_text()
+    assert "--remote" not in log.read_text()
 
 
 def test_macos_reinstall_is_idempotent(tmp_path):

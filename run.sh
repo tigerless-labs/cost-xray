@@ -22,6 +22,9 @@ CODEX_LOGFILE="${STATE}/codex-proxy.log"
 CODEX_UNIT="${HOME}/.config/systemd/user/cost-xray-codex.service"
 CODEX_SERVICE="cost-xray-codex.service"
 CA_BUNDLE="${STATE}/codex-ca-bundle.pem"
+CODEX_CONTROL_SOCKET="${CODEX_CONTROL_SOCKET:-${HOME}/.codex/app-server-control/app-server-control.sock}"
+CODEX_DAEMON_PIDFILE="${CODEX_DAEMON_PIDFILE:-${HOME}/.codex/app-server-daemon/app-server.pid}"
+CODEX_DAEMON_XRAY_PIDFILE="${STATE}/codex-daemon-xray.pid"
 MAT_UNIT="${HOME}/.config/systemd/user/cost-xray-materializer.service"
 MAT_SERVICE="cost-xray-materializer.service"
 PAUSEFILE="${STATE}/paused"
@@ -287,6 +290,52 @@ _ensure_codex_proxy() {
   return 1
 }
 
+_codex_daemon_uses_xray() {
+  [ -S "$CODEX_CONTROL_SOCKET" ] &&
+    [ -f "$CODEX_DAEMON_PIDFILE" ] &&
+    [ -f "$CODEX_DAEMON_XRAY_PIDFILE" ] &&
+    cmp -s "$CODEX_DAEMON_PIDFILE" "$CODEX_DAEMON_XRAY_PIDFILE"
+}
+
+_wait_for_codex_daemon() {
+  local i=0
+  while [ "$i" -lt 20 ]; do
+    [ -S "$CODEX_CONTROL_SOCKET" ] && [ -f "$CODEX_DAEMON_PIDFILE" ] && return 0
+    sleep 0.25
+    i=$((i+1))
+  done
+  echo "cost-xray: shared Codex daemon did not create $CODEX_CONTROL_SOCKET" >&2
+  return 1
+}
+
+_mark_codex_daemon_xray() {
+  _wait_for_codex_daemon || return 1
+  cp "$CODEX_DAEMON_PIDFILE" "$CODEX_DAEMON_XRAY_PIDFILE"
+}
+
+_prepare_codex_remote() {
+  local bin="$1"
+  _ensure_codex_proxy
+  [ -f "$CA_BUNDLE" ] || _build_ca_bundle
+  [ -f "$CA_BUNDLE" ] || {
+    echo "cost-xray: codex CA bundle is unavailable; run ./run.sh install first" >&2
+    return 1
+  }
+
+  if ! _codex_daemon_uses_xray; then
+    echo "Preparing the shared Codex daemon through cost-xray (one time)..."
+    "$bin" app-server daemon stop >/dev/null 2>&1 || true
+  fi
+
+  if ! _run_codex_proxied "$bin" remote-control start --json; then
+    echo "cost-xray: Codex Remote could not become the active host." >&2
+    echo "Turn off ChatGPT desktop > Settings > Connections > Control this Mac > Allow connections," >&2
+    echo "then run 'cx remote' again. Only one Remote app-server can own this Mac." >&2
+    return 1
+  fi
+  _mark_codex_daemon_xray
+}
+
 codex_daemon_restart() {
   local bin
   bin="$(_codex_bin)" || {
@@ -302,6 +351,18 @@ codex_daemon_restart() {
   echo "Restarting the shared Codex app-server through cost-xray (active Codex clients may reconnect)..."
   "$bin" app-server daemon stop >/dev/null 2>&1 || true
   _run_codex_proxied "$bin" app-server daemon start
+  _mark_codex_daemon_xray
+}
+
+codex_remote() {
+  local bin
+  bin="$(_codex_bin)" || {
+    echo "cost-xray: codex executable not found" >&2
+    return 1
+  }
+  _prepare_codex_remote "$bin" || return 1
+  echo "Connecting this terminal to the shared Remote session..."
+  _run_codex_proxied "$bin" --remote "unix://$CODEX_CONTROL_SOCKET" "$@"
 }
 
 _start_manual() {
@@ -423,7 +484,10 @@ cx() {
                      else PYTHONPATH=. "$py" -m cost_xray.tui; fi ) ;;
     start|stop|restart|status|install|uninstall|codex-daemon-restart)
                    bash "$d/run.sh" "$@" ;;
-    -h|--help|help) printf 'cx                 open the live TUI\ncx start|stop|restart|status   manage capture\ncx codex-daemon-restart        restart the shared Codex backend through Xray\ncx install|uninstall           (re)install / remove\n' ;;
+    remote|codex-shared)
+                   shift
+                   bash "$d/run.sh" codex-remote "$@" ;;
+    -h|--help|help) printf 'cx                 open the live TUI\ncx remote [args]   run Codex through the phone-visible shared daemon\ncx start|stop|restart|status   manage capture\ncx codex-daemon-restart        restart the shared Codex backend through Xray\ncx install|uninstall           (re)install / remove\n' ;;
     *)             echo "cx: unknown command '$1' (try: cx, cx start|stop|restart|status)" >&2; return 2 ;;
   esac
 }
@@ -527,6 +591,7 @@ install_service() {
   echo "Open a NEW terminal (or:  source ~/.bashrc ), then just run your agent:"
   [ "$claude" = 1 ] && echo "    claude            # captured"
   [ "$codex"  = 1 ] && echo "    codex             # captured"
+  [ "$codex"  = 1 ] && echo "    cx remote          # captured + visible from Codex Remote on your phone"
   echo "    cx                # open the live TUI (from any directory)"
   echo "Manage capture from anywhere:  cx status | cx stop | cx start | cx restart"
   if [ "$claude" = 1 ]; then
@@ -631,10 +696,11 @@ case "${1:-}" in
   status)          status ;;
   restart)         _stop_services; start ;;
   codex-daemon-restart) codex_daemon_restart ;;
+  codex-remote|codex-shared) shift; codex_remote "$@" ;;
   _serve)          _serve ;;
   _serve_codex)    _serve_codex ;;
   tui)             _run_tui ;;
   ""|run)          start; echo; echo "Live breakdown (Ctrl-C detaches; proxies stay up):"; echo
                    _run_tui ;;
-  *) echo "usage: $0 {install|uninstall|start|stop|restart|codex-daemon-restart|status|tui}" >&2; exit 2 ;;
+  *) echo "usage: $0 {install|uninstall|start|stop|restart|codex-daemon-restart|codex-remote|status|tui}" >&2; exit 2 ;;
 esac
