@@ -1,5 +1,6 @@
 import os
 import shutil
+import socket
 import subprocess
 import tempfile
 from pathlib import Path
@@ -50,6 +51,11 @@ def _macos_run(tmp_path, *args, shell="/bin/zsh", agents="claude"):
     log = tmp_path / "launchctl.log"
     _fake(bindir, "uname", 'echo Darwin')
     _fake(bindir, "launchctl", 'echo "$@" >> "$LAUNCHCTL_LOG"')
+    _fake(bindir, "mitmdump", "exit 0")
+    if "codex" in agents:
+        mitm_ca = home / ".mitmproxy" / "mitmproxy-ca-cert.pem"
+        mitm_ca.parent.mkdir(parents=True)
+        mitm_ca.write_text("test CA")
     env = dict(os.environ)
     env["HOME"] = str(home)
     env["PATH"] = f"{bindir}:{env.get('PATH', '')}"
@@ -72,6 +78,81 @@ def test_macos_install_writes_launchagent_and_wrapper(tmp_path):
     assert "# >>> cost-xray >>>" in rc and "claude()" in rc and "cx()" in rc
     assert not (home / ".bashrc").exists()
     assert not (home / ".config" / "systemd").exists()
+
+
+def test_codex_wrapper_prefers_remote_managed_binary_and_keeps_proxy_env(tmp_path):
+    res, home, _ = _macos_run(tmp_path, "install", shell="/bin/zsh", agents="codex")
+    assert res.returncode == 0, res.stderr
+
+    managed = home / ".codex" / "packages" / "standalone" / "current" / "codex"
+    managed.parent.mkdir(parents=True)
+    log = tmp_path / "codex.log"
+    _fake(
+        managed.parent,
+        "codex",
+        'printf "%s\\n" "$HTTP_PROXY|$HTTPS_PROXY|$CODEX_CA_CERTIFICATES|$SSL_CERT_FILE|'
+        '$NODE_EXTRA_CA_CERTS|$*" >> "$CODEX_TEST_LOG"',
+    )
+    state = home / ".cost-xray"
+    (state / "codex-ca-bundle.pem").write_text("test CA")
+
+    command = (
+        f'source "{home / ".zshrc"}"; '
+        '_ctxray_up() { return 0; }; '
+        'codex remote-control start'
+    )
+    env = dict(os.environ, HOME=str(home), CODEX_TEST_LOG=str(log))
+    result = subprocess.run(["/bin/zsh", "-c", command], env=env, capture_output=True, text=True)
+
+    assert result.returncode == 0, result.stderr
+    expected_proxy = "http://127.0.0.1:8789"
+    assert log.read_text().strip() == (
+        f"{expected_proxy}|{expected_proxy}|{state / 'codex-ca-bundle.pem'}|"
+        f"{state / 'codex-ca-bundle.pem'}|"
+        f"{state / 'codex-ca-bundle.pem'}|remote-control start"
+    )
+
+
+def test_codex_daemon_restart_runs_managed_binary_through_proxy(tmp_path):
+    home = tmp_path / "home"
+    state = home / ".cost-xray"
+    state.mkdir(parents=True)
+    managed = home / ".codex" / "packages" / "standalone" / "current" / "codex"
+    managed.parent.mkdir(parents=True)
+    log = tmp_path / "codex.log"
+    _fake(
+        managed.parent,
+        "codex",
+        'printf "%s\\n" "$HTTP_PROXY|$HTTPS_PROXY|$CODEX_CA_CERTIFICATES|$SSL_CERT_FILE|'
+        '$NODE_EXTRA_CA_CERTS|$*" >> "$CODEX_TEST_LOG"; '
+        '[ "$*" != "app-server daemon stop" ]',
+    )
+    ca = state / "codex-ca-bundle.pem"
+    ca.write_text("test CA")
+
+    listener = socket.socket()
+    listener.bind(("127.0.0.1", 0))
+    listener.listen()
+    port = listener.getsockname()[1]
+    (state / "codex-port").write_text(str(port))
+    env = dict(os.environ, HOME=str(home), CODEX_TEST_LOG=str(log))
+    try:
+        result = subprocess.run(
+            ["bash", str(RUN_SH), "codex-daemon-restart"],
+            env=env,
+            capture_output=True,
+            text=True,
+        )
+    finally:
+        listener.close()
+
+    assert result.returncode == 0, result.stderr
+    expected_proxy = f"http://127.0.0.1:{port}"
+    lines = log.read_text().splitlines()
+    assert lines[-2].endswith("|app-server daemon stop")
+    assert lines[-1] == (
+        f"{expected_proxy}|{expected_proxy}|{ca}|{ca}|{ca}|app-server daemon start"
+    )
 
 
 def test_macos_reinstall_is_idempotent(tmp_path):
@@ -112,6 +193,7 @@ def _linux_run(tmp_path, *args, shell="/bin/bash", agents="claude"):
     bindir.mkdir(exist_ok=True)
     log = tmp_path / "systemctl.log"
     _fake(bindir, "uname", 'echo Linux')
+    _fake(bindir, "mitmdump", "exit 0")
     _fake(bindir, "systemctl",
           'case "$2" in show-environment) exit 0 ;; is-active) echo active; exit 0 ;; esac\n'
           'echo "$@" >> "$SYSTEMCTL_LOG"')

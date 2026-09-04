@@ -250,6 +250,60 @@ _mat_unit_installed() { [ -f "$MAT_UNIT" ]; }
 _live_port() { cat "$PORTFILE" 2>/dev/null || echo "$DEFAULT_PORT"; }
 _codex_live_port() { cat "$CODEX_PORTFILE" 2>/dev/null || echo "$DEFAULT_CODEX_PORT"; }
 
+_codex_bin() {
+  local managed="${CODEX_MANAGED_BIN:-${HOME}/.codex/packages/standalone/current/codex}"
+  if [ -x "$managed" ]; then
+    printf '%s' "$managed"
+    return 0
+  fi
+  command -v codex 2>/dev/null
+}
+
+_run_codex_proxied() {
+  local bin="$1" p ca
+  shift
+  p="$(_codex_live_port)"
+  ca="$CA_BUNDLE"
+  HTTP_PROXY="http://127.0.0.1:$p" HTTPS_PROXY="http://127.0.0.1:$p" \
+  CODEX_CA_CERTIFICATES="$ca" SSL_CERT_FILE="$ca" NODE_EXTRA_CA_CERTS="$ca" \
+    "$bin" "$@"
+}
+
+_ensure_codex_proxy() {
+  local p i=0
+  p="$(_codex_live_port)"
+  if _listening "$p"; then return 0; fi
+  if _codex_unit_installed; then
+    _sv_start codex
+  else
+    _kind_start_manual codex
+  fi
+  while [ "$i" -lt 8 ]; do
+    _listening "$p" && return 0
+    sleep 0.25
+    i=$((i+1))
+  done
+  echo "cost-xray: codex proxy did not become ready on 127.0.0.1:$p" >&2
+  return 1
+}
+
+codex_daemon_restart() {
+  local bin
+  bin="$(_codex_bin)" || {
+    echo "cost-xray: codex executable not found" >&2
+    return 1
+  }
+  _ensure_codex_proxy
+  [ -f "$CA_BUNDLE" ] || _build_ca_bundle
+  [ -f "$CA_BUNDLE" ] || {
+    echo "cost-xray: codex CA bundle is unavailable; run ./run.sh install first" >&2
+    return 1
+  }
+  echo "Restarting the shared Codex app-server through cost-xray (active Codex clients may reconnect)..."
+  "$bin" app-server daemon stop >/dev/null 2>&1 || true
+  _run_codex_proxied "$bin" app-server daemon start
+}
+
 _start_manual() {
   local label="$1" entry="$2" pidfile="$3" logfile="$4" pid
   pid="$(cat "$pidfile" 2>/dev/null || true)"
@@ -367,9 +421,9 @@ cx() {
     ""|tui)        ( cd "$d" 2>/dev/null || return 1
                      if "$py" -c 'import textual' 2>/dev/null; then PYTHONPATH=. "$py" -m cost_xray.tui_app
                      else PYTHONPATH=. "$py" -m cost_xray.tui; fi ) ;;
-    start|stop|restart|status|install|uninstall)
+    start|stop|restart|status|install|uninstall|codex-daemon-restart)
                    bash "$d/run.sh" "$@" ;;
-    -h|--help|help) printf 'cx                 open the live TUI\ncx start|stop|restart|status   manage capture\ncx install|uninstall           (re)install / remove\n' ;;
+    -h|--help|help) printf 'cx                 open the live TUI\ncx start|stop|restart|status   manage capture\ncx codex-daemon-restart        restart the shared Codex backend through Xray\ncx install|uninstall           (re)install / remove\n' ;;
     *)             echo "cx: unknown command '$1' (try: cx, cx start|stop|restart|status)" >&2; return 2 ;;
   esac
 }
@@ -388,14 +442,23 @@ CLAUDEBLOCK
   fi
   if [ "$inc_codex" = 1 ]; then
     cat >> "$RC" <<'CODEXBLOCK'
+_ctxray_codex_exec() {
+  local managed="${CODEX_MANAGED_BIN:-$HOME/.codex/packages/standalone/current/codex}"
+  if [ -x "$managed" ]; then
+    "$managed" "$@"
+  else
+    command codex "$@"
+  fi
+}
 codex() {
   local s="$HOME/.cost-xray" p; p="$(cat "$s/codex-port" 2>/dev/null || echo 8789)"
   local ca="$s/codex-ca-bundle.pem"
   if [ -f "$ca" ] && _ctxray_up "$p" cost-xray-codex.service; then
     HTTP_PROXY="http://127.0.0.1:$p" HTTPS_PROXY="http://127.0.0.1:$p" \
-    SSL_CERT_FILE="$ca" NODE_EXTRA_CA_CERTS="$ca" command codex "$@"
+    CODEX_CA_CERTIFICATES="$ca" SSL_CERT_FILE="$ca" NODE_EXTRA_CA_CERTS="$ca" \
+      _ctxray_codex_exec "$@"
   else
-    command codex "$@"
+    _ctxray_codex_exec "$@"
   fi
 }
 CODEXBLOCK
@@ -567,10 +630,11 @@ case "${1:-}" in
   stop)            stop ;;
   status)          status ;;
   restart)         _stop_services; start ;;
+  codex-daemon-restart) codex_daemon_restart ;;
   _serve)          _serve ;;
   _serve_codex)    _serve_codex ;;
   tui)             _run_tui ;;
   ""|run)          start; echo; echo "Live breakdown (Ctrl-C detaches; proxies stay up):"; echo
                    _run_tui ;;
-  *) echo "usage: $0 {install|uninstall|start|stop|restart|status|tui}" >&2; exit 2 ;;
+  *) echo "usage: $0 {install|uninstall|start|stop|restart|codex-daemon-restart|status|tui}" >&2; exit 2 ;;
 esac

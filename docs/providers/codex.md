@@ -14,6 +14,32 @@ Codex pins its endpoint, so capture is a forward proxy with a local CA that only
 trusts (set up by the installer; self-healing wrapper). The intercepted path is the Codex Responses
 endpoint, carried as a **WebSocket frame stream** rather than one request/response per turn.
 
+### Desktop Remote and the shared app-server
+
+Codex Remote installs a managed standalone Codex binary under
+`~/.codex/packages/standalone/current/` and runs a shared app-server daemon from it. The Xray shell
+wrapper prefers that managed binary when present, so terminal clients and the daemon use the same
+Codex version; Homebrew or another `codex` on `PATH` remains the fallback.
+
+The daemon is long-lived, so proxy variables from a later shell do not change its environment.
+After enabling Remote, installing Xray, or changing the Codex proxy configuration, restart the
+shared backend explicitly:
+
+```sh
+cx codex-daemon-restart
+```
+
+This starts the Codex capture proxy if necessary, stops the existing managed app-server, and starts
+it fresh with Xray's forward-proxy and scoped CA environment. A simple daemon `restart` is not
+enough because the existing updater process retains its original environment. Active Codex clients
+may briefly reconnect. Ordinary `codex` launches never restart the shared daemon implicitly.
+
+Remote permits only one live app-server for a registered Mac. If ChatGPT desktop already has
+**Settings → Connections → Control this Mac** enabled, a separately managed CLI daemon receives
+`409 Conflict` (`Remote app server already online`). Turn that desktop setting off before starting
+Remote on the managed daemon. The desktop app and the managed daemon are separate live backends;
+sharing Codex's on-disk thread history does not make them the same running agent process.
+
 ## Storage format
 
 `raw.jsonl` is **one frame per line**, appended in real time as the WebSocket delivers them — not a
