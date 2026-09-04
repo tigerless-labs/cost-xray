@@ -114,6 +114,94 @@ def test_codex_wrapper_prefers_remote_managed_binary_and_keeps_proxy_env(tmp_pat
     )
 
 
+def test_codex_wrapper_uses_shared_remote_by_default_and_direct_escape(tmp_path):
+    res, home, _ = _macos_run(tmp_path, "install", shell="/bin/zsh", agents="codex")
+    assert res.returncode == 0, res.stderr
+
+    managed = home / ".codex" / "packages" / "standalone" / "current" / "codex"
+    managed.parent.mkdir(parents=True)
+    log = tmp_path / "codex.log"
+    _fake(
+        managed.parent,
+        "codex",
+        'printf "%s\\n" "$HTTP_PROXY|$HTTPS_PROXY|$*" >> "$CODEX_TEST_LOG"',
+    )
+    state = home / ".cost-xray"
+    (state / "codex-ca-bundle.pem").write_text("test CA")
+    daemon_dir = home / ".codex" / "app-server-daemon"
+    daemon_dir.mkdir(parents=True)
+    daemon_pid = daemon_dir / "app-server.pid"
+    daemon_pid.write_text('{"pid":1234}')
+    socket_dir = Path(tempfile.mkdtemp(prefix="cx-socket-", dir="/tmp"))
+    socket_path = socket_dir / "app.sock"
+    unix_listener = socket.socket(socket.AF_UNIX)
+    unix_listener.bind(str(socket_path))
+    unix_listener.listen()
+
+    proxy_listener = socket.socket()
+    proxy_listener.bind(("127.0.0.1", 0))
+    proxy_listener.listen()
+    port = proxy_listener.getsockname()[1]
+    (state / "codex-port").write_text(str(port))
+    command = (
+        f'source "{home / ".zshrc"}"; '
+        '_ctxray_up() { return 0; }; '
+        'codex resume thread-shared; '
+        'codex direct resume thread-local'
+    )
+    env = dict(
+        os.environ,
+        HOME=str(home),
+        CODEX_TEST_LOG=str(log),
+        CODEX_CONTROL_SOCKET=str(socket_path),
+    )
+    try:
+        result = subprocess.run(
+            ["/bin/zsh", "-c", command],
+            env=env,
+            capture_output=True,
+            text=True,
+        )
+    finally:
+        proxy_listener.close()
+        unix_listener.close()
+        shutil.rmtree(socket_dir, ignore_errors=True)
+
+    assert result.returncode == 0, result.stderr
+    expected_proxy = f"http://127.0.0.1:{port}"
+    assert log.read_text().splitlines() == [
+        "||app-server daemon stop",
+        f"{expected_proxy}|{expected_proxy}|remote-control start --json",
+        f"{expected_proxy}|{expected_proxy}|--remote unix://{socket_path} resume thread-shared",
+        f"{expected_proxy}|{expected_proxy}|resume thread-local",
+    ]
+
+
+def test_codex_wrapper_keeps_management_commands_direct(tmp_path):
+    res, home, _ = _macos_run(tmp_path, "install", shell="/bin/zsh", agents="codex")
+    assert res.returncode == 0, res.stderr
+    rc = (home / ".zshrc").read_text()
+    assert "app-server|remote-control" in rc
+    assert "direct)" in rc
+
+
+def test_codex_wrapper_respects_capture_pause(tmp_path):
+    res, home, _ = _macos_run(tmp_path, "install", shell="/bin/zsh", agents="codex")
+    assert res.returncode == 0, res.stderr
+
+    managed = home / ".codex" / "packages" / "standalone" / "current" / "codex"
+    managed.parent.mkdir(parents=True)
+    log = tmp_path / "codex.log"
+    _fake(managed.parent, "codex", 'printf "%s\n" "$*" >> "$CODEX_TEST_LOG"')
+
+    command = f'source "{home / ".zshrc"}"; codex resume thread-local'
+    env = dict(os.environ, HOME=str(home), CODEX_TEST_LOG=str(log), CX_OFF="1")
+    result = subprocess.run(["/bin/zsh", "-c", command], env=env, capture_output=True, text=True)
+
+    assert result.returncode == 0, result.stderr
+    assert log.read_text().strip() == "resume thread-local"
+
+
 def test_codex_daemon_restart_runs_managed_binary_through_proxy(tmp_path):
     home = tmp_path / "home"
     state = home / ".cost-xray"

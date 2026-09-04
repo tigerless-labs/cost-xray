@@ -514,7 +514,7 @@ _ctxray_codex_exec() {
     command codex "$@"
   fi
 }
-codex() {
+_ctxray_codex_direct() {
   local s="$HOME/.cost-xray" p; p="$(cat "$s/codex-port" 2>/dev/null || echo 8789)"
   local ca="$s/codex-ca-bundle.pem"
   if [ -f "$ca" ] && _ctxray_up "$p" cost-xray-codex.service; then
@@ -524,6 +524,24 @@ codex() {
   else
     _ctxray_codex_exec "$@"
   fi
+}
+codex() {
+  case "${1:-}" in
+    direct)
+      shift
+      _ctxray_codex_direct "$@"
+      ;;
+    exec|e|review|login|logout|mcp|plugin|mcp-server|app-server|remote-control|app|completion|update|doctor|sandbox|debug|apply|a|archive|delete|migrate-rollouts|unarchive|cloud|exec-server|features|help|-h|--help|-V|--version)
+      _ctxray_codex_direct "$@"
+      ;;
+    *)
+      if [ -n "${CX_OFF:-}" ] || [ -e "$HOME/.cost-xray/paused" ]; then
+        _ctxray_codex_direct "$@"
+      else
+        cx remote "$@"
+      fi
+      ;;
+  esac
 }
 CODEXBLOCK
   fi
@@ -590,8 +608,9 @@ install_service() {
   echo
   echo "Open a NEW terminal (or:  source ~/.bashrc ), then just run your agent:"
   [ "$claude" = 1 ] && echo "    claude            # captured"
-  [ "$codex"  = 1 ] && echo "    codex             # captured"
-  [ "$codex"  = 1 ] && echo "    cx remote          # captured + visible from Codex Remote on your phone"
+  [ "$codex"  = 1 ] && echo "    codex             # captured + visible from Codex Remote on your phone"
+  [ "$codex"  = 1 ] && echo "    codex direct      # captured, separate local writer (not phone-visible)"
+  [ "$codex"  = 1 ] && echo "    cx remote          # explicit alias for the shared Remote session"
   echo "    cx                # open the live TUI (from any directory)"
   echo "Manage capture from anywhere:  cx status | cx stop | cx start | cx restart"
   if [ "$claude" = 1 ]; then
