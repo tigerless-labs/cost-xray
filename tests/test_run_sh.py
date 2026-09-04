@@ -284,7 +284,8 @@ def test_codex_remote_prepares_daemon_once_then_attaches_to_shared_socket(tmp_pa
     proxy_listener = socket.socket()
     proxy_listener.bind(("127.0.0.1", 0))
     proxy_listener.listen()
-    (state / "codex-port").write_text(str(proxy_listener.getsockname()[1]))
+    proxy_port = proxy_listener.getsockname()[1]
+    (state / "codex-port").write_text(str(proxy_port))
     env = dict(
         os.environ,
         HOME=str(home),
@@ -320,6 +321,66 @@ def test_codex_remote_prepares_daemon_once_then_attaches_to_shared_socket(tmp_pa
         f"--remote unix://{socket_path} resume thread-456",
     ]
     assert (state / "codex-daemon-xray.pid").read_text() == daemon_pid.read_text()
+    assert (state / "codex-daemon-xray.port").read_text() == str(proxy_port)
+
+
+def test_codex_remote_restarts_daemon_when_proxy_port_changes(tmp_path):
+    home = tmp_path / "home"
+    state = home / ".cost-xray"
+    state.mkdir(parents=True)
+    managed = home / ".codex" / "packages" / "standalone" / "current" / "codex"
+    managed.parent.mkdir(parents=True)
+    daemon_dir = home / ".codex" / "app-server-daemon"
+    daemon_dir.mkdir(parents=True)
+    daemon_pid = daemon_dir / "app-server.pid"
+    daemon_pid.write_text('{"pid":1234}')
+    socket_dir = Path(tempfile.mkdtemp(prefix="cx-socket-", dir="/tmp"))
+    socket_path = socket_dir / "app.sock"
+    unix_listener = socket.socket(socket.AF_UNIX)
+    unix_listener.bind(str(socket_path))
+    unix_listener.listen()
+    log = tmp_path / "codex.log"
+    _fake(managed.parent, "codex", 'printf "%s\n" "$*" >> "$CODEX_TEST_LOG"')
+    (state / "codex-ca-bundle.pem").write_text("test CA")
+
+    first_proxy = socket.socket()
+    first_proxy.bind(("127.0.0.1", 0))
+    first_proxy.listen()
+    second_proxy = socket.socket()
+    second_proxy.bind(("127.0.0.1", 0))
+    second_proxy.listen()
+    (state / "codex-port").write_text(str(first_proxy.getsockname()[1]))
+    env = dict(
+        os.environ,
+        HOME=str(home),
+        CODEX_TEST_LOG=str(log),
+        CODEX_CONTROL_SOCKET=str(socket_path),
+    )
+    try:
+        first = subprocess.run(
+            ["bash", str(RUN_SH), "codex-remote", "resume", "thread-123"],
+            env=env,
+            capture_output=True,
+            text=True,
+        )
+        new_port = second_proxy.getsockname()[1]
+        (state / "codex-port").write_text(str(new_port))
+        second = subprocess.run(
+            ["bash", str(RUN_SH), "codex-remote", "resume", "thread-456"],
+            env=env,
+            capture_output=True,
+            text=True,
+        )
+    finally:
+        first_proxy.close()
+        second_proxy.close()
+        unix_listener.close()
+        shutil.rmtree(socket_dir, ignore_errors=True)
+
+    assert first.returncode == 0, first.stderr
+    assert second.returncode == 0, second.stderr
+    assert log.read_text().splitlines().count("app-server daemon stop") == 2
+    assert (state / "codex-daemon-xray.port").read_text() == str(new_port)
 
 
 def test_codex_remote_explains_desktop_remote_conflict(tmp_path):

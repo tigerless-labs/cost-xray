@@ -25,6 +25,7 @@ CA_BUNDLE="${STATE}/codex-ca-bundle.pem"
 CODEX_CONTROL_SOCKET="${CODEX_CONTROL_SOCKET:-${HOME}/.codex/app-server-control/app-server-control.sock}"
 CODEX_DAEMON_PIDFILE="${CODEX_DAEMON_PIDFILE:-${HOME}/.codex/app-server-daemon/app-server.pid}"
 CODEX_DAEMON_XRAY_PIDFILE="${STATE}/codex-daemon-xray.pid"
+CODEX_DAEMON_XRAY_PORTFILE="${STATE}/codex-daemon-xray.port"
 MAT_UNIT="${HOME}/.config/systemd/user/cost-xray-materializer.service"
 MAT_SERVICE="cost-xray-materializer.service"
 PAUSEFILE="${STATE}/paused"
@@ -160,6 +161,14 @@ EOF
 }
 
 _listening() { (exec 3<>"/dev/tcp/127.0.0.1/$1") 2>/dev/null; }
+_wait_for_port_release() {
+  local p="$1" i=0
+  while _listening "$p"; do
+    [ "$i" -ge 20 ] && return 0
+    sleep 0.1
+    i=$((i+1))
+  done
+}
 _kind_port() { case "$1" in reverse) _live_port ;; codex) _codex_live_port ;; esac; }
 _kind_start_manual() {
   case "$1" in
@@ -175,7 +184,10 @@ _kind_stop_manual() {
 }
 
 _launchd_start() {
+  local previous_port
+  previous_port="$(_kind_port "$1")"
   launchctl bootout "$(_ld_domain)/$(_k_label "$1")" 2>/dev/null || true
+  _wait_for_port_release "$previous_port"
   if launchctl bootstrap "$(_ld_domain)" "$(_k_plist "$1")" 2>/dev/null; then return 0; fi
   _kind_start_manual "$1"
 }
@@ -294,7 +306,9 @@ _codex_daemon_uses_xray() {
   [ -S "$CODEX_CONTROL_SOCKET" ] &&
     [ -f "$CODEX_DAEMON_PIDFILE" ] &&
     [ -f "$CODEX_DAEMON_XRAY_PIDFILE" ] &&
-    cmp -s "$CODEX_DAEMON_PIDFILE" "$CODEX_DAEMON_XRAY_PIDFILE"
+    [ -f "$CODEX_DAEMON_XRAY_PORTFILE" ] &&
+    cmp -s "$CODEX_DAEMON_PIDFILE" "$CODEX_DAEMON_XRAY_PIDFILE" &&
+    cmp -s "$CODEX_PORTFILE" "$CODEX_DAEMON_XRAY_PORTFILE"
 }
 
 _wait_for_codex_daemon() {
@@ -311,6 +325,7 @@ _wait_for_codex_daemon() {
 _mark_codex_daemon_xray() {
   _wait_for_codex_daemon || return 1
   cp "$CODEX_DAEMON_PIDFILE" "$CODEX_DAEMON_XRAY_PIDFILE"
+  cp "$CODEX_PORTFILE" "$CODEX_DAEMON_XRAY_PORTFILE"
 }
 
 _prepare_codex_remote() {
