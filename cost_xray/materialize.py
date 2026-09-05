@@ -54,7 +54,7 @@ def _exact_pins(obj, evs, model, agent, path):
 
 def _atomic_write(path, text):
     tmp = path.with_name(path.name + ".tmp")
-    tmp.write_text(text)
+    tmp.write_text(text, encoding="utf-8")
     os.replace(tmp, path)
 
 
@@ -114,7 +114,7 @@ def _refold(d, agent, old):
         if old.get(k):
             summary[k] = old[k]
     turn = 0
-    for line in (d / "derived.jsonl").read_text().splitlines():
+    for line in (d / "derived.jsonl").read_text(encoding="utf-8").splitlines():
         line = line.strip()
         if not line:
             continue
@@ -136,8 +136,8 @@ def _load_state(d, agent):
     sp, dp = d / "summary.json", d / "derived.jsonl"
     if sp.exists() and dp.exists():
         try:
-            sm = json.loads(sp.read_text())
-            n = sum(1 for ln in dp.read_text().splitlines() if ln.strip())
+            sm = json.loads(sp.read_text(encoding="utf-8"))
+            n = sum(1 for ln in dp.read_text(encoding="utf-8").splitlines() if ln.strip())
             if sm.get("agent") == agent and sm.get("n_turns") == n:
                 if sm.get("logic_version") == LOGIC_VERSION:
                     return sm, n, sm.get("raw_offset", 0)
@@ -158,7 +158,7 @@ def materialize_session(session_dir):
             fcntl.flock(lf, fcntl.LOCK_EX | fcntl.LOCK_NB)
         except BlockingIOError:
             try:
-                return json.loads((d / "summary.json").read_text())
+                return json.loads((d / "summary.json").read_text(encoding="utf-8"))
             except Exception:
                 return None
         return _materialize_locked(d)
@@ -212,7 +212,7 @@ def _materialize_locked(d):
 
     derived_path = d / "derived.jsonl"
     if not incremental:
-        derived_path.write_text("")
+        derived_path.write_text("", encoding="utf-8")
     buf, turn = [], n_done
 
     def _flush(offset=None):
@@ -286,7 +286,7 @@ def _rollup_locked(agent_dir, mutate):
     with lk.open("w") as lf:
         fcntl.flock(lf, fcntl.LOCK_EX)
         try:
-            data = json.loads(rp.read_text())
+            data = json.loads(rp.read_text(encoding="utf-8"))
         except Exception:
             data = None
         if not isinstance(data, dict) or data.get("version") != ROLLUP_VERSION:
@@ -318,7 +318,7 @@ def rebuild_rollup(agent_dir):
         sessions = {}
         for sp in agent_dir.glob("*/summary.json"):
             try:
-                sm = json.loads(sp.read_text())
+                sm = json.loads(sp.read_text(encoding="utf-8"))
                 sessions[sp.parent.name] = _rollup_entry(sm, sp.stat().st_mtime)
             except Exception:
                 pass
