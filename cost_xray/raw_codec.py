@@ -121,7 +121,7 @@ def load_store(d: pathlib.Path) -> dict:
     store: dict = {}
     if not p.exists():
         return store
-    with p.open() as f:
+    with p.open(encoding="utf-8") as f:
         for line in f:
             line = line.strip()
             if not line:
@@ -139,7 +139,7 @@ def load_hashes(d: pathlib.Path) -> set:
     out: set = set()
     if not p.exists():
         return out
-    with p.open() as f:
+    with p.open(encoding="utf-8") as f:
         for line in f:
             line = line.strip()
             if not line:
@@ -158,13 +158,13 @@ def append_record(d: pathlib.Path, record, *, store=None, seen=None, ctx=None) -
     delta, blocks = encode(record, ctx)
     new = [(h, b) for h, b in blocks.items() if h not in seen]
     if new:
-        with (d / BLOCKS).open("a") as f:
+        with (d / BLOCKS).open("a", encoding="utf-8") as f:
             for h, b in new:
                 f.write(_dump([h, b]) + "\n")
                 seen.add(h)
                 if store is not None:
                     store[h] = b
-    with (d / RAW).open("a") as f:
+    with (d / RAW).open("a", encoding="utf-8") as f:
         f.write(_dump(delta) + "\n")
 
 
@@ -174,7 +174,7 @@ def iter_records(d: pathlib.Path):
     if not raw.exists():
         return
     store = load_store(d)
-    with raw.open() as f:
+    with raw.open(encoding="utf-8") as f:
         for line in f:
             line = line.strip()
             if not line:
@@ -192,7 +192,7 @@ def latest_record(d: pathlib.Path):
     if not raw.exists():
         return None
     last = None
-    with raw.open() as f:
+    with raw.open(encoding="utf-8") as f:
         for line in f:
             line = line.strip()
             if line:
