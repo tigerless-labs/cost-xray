@@ -61,6 +61,20 @@ If ChatGPT desktop still owns Remote, `cx remote` stops with the exact setting t
 managed daemon becomes the sole Remote owner, the terminal and phone are clients of the same
 app-server and can observe or steer the same live thread.
 
+## GitHub tool traffic
+
+Codex launchers add `github.com`, `githubusercontent.com`, and `githubassets.com`
+to both `NO_PROXY` and `no_proxy`, preserving existing exclusions from either
+variable. This also covers their subdomains. Git and GitHub CLI child processes
+connect directly; AI endpoints continue through the capture proxy with certificate
+verification enabled. No system trust-store changes are needed.
+
+After updating an existing installation, refresh the shell wrapper and restart the
+shared backend with `cx codex-daemon-restart`. Open a new terminal to load the
+updated wrapper. Existing daemon processes retain their launch environment until
+restarted. Sandbox permission for macOS keychain access is still independent of
+proxy routing.
+
 ## Storage format
 
 `raw.jsonl` is **one frame per line**, appended in real time as the WebSocket delivers them — not a

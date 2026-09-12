@@ -274,11 +274,18 @@ _codex_bin() {
   command -v codex 2>/dev/null
 }
 
+_codex_no_proxy() {
+  # GitHub is tool traffic, not model traffic. Preserve both client conventions.
+  printf '%s' "${NO_PROXY:+$NO_PROXY,}${no_proxy:+$no_proxy,}github.com,githubusercontent.com,githubassets.com"
+}
+
 _run_codex_proxied() {
-  local bin="$1" p ca
+  local bin="$1" p ca bypass
   shift
   p="$(_codex_live_port)"
   ca="$CA_BUNDLE"
+  bypass="$(_codex_no_proxy)"
+  NO_PROXY="$bypass" no_proxy="$bypass" \
   HTTP_PROXY="http://127.0.0.1:$p" HTTPS_PROXY="http://127.0.0.1:$p" \
   CODEX_CA_CERTIFICATES="$ca" SSL_CERT_FILE="$ca" NODE_EXTRA_CA_CERTS="$ca" \
     "$bin" "$@"
@@ -521,6 +528,11 @@ CLAUDEBLOCK
   fi
   if [ "$inc_codex" = 1 ]; then
     cat >> "$RC" <<'CODEXBLOCK'
+_ctxray_no_proxy() {
+  # GitHub is tool traffic, not model traffic. Preserve both client conventions.
+  printf '%s' "${NO_PROXY:+$NO_PROXY,}${no_proxy:+$no_proxy,}github.com,githubusercontent.com,githubassets.com"
+}
+
 _ctxray_codex_exec() {
   local managed="${CODEX_MANAGED_BIN:-$HOME/.codex/packages/standalone/current/codex}"
   if [ -x "$managed" ]; then
@@ -531,8 +543,10 @@ _ctxray_codex_exec() {
 }
 _ctxray_codex_direct() {
   local s="$HOME/.cost-xray" p; p="$(cat "$s/codex-port" 2>/dev/null || echo 8789)"
-  local ca="$s/codex-ca-bundle.pem"
+  local ca="$s/codex-ca-bundle.pem" bypass
   if [ -f "$ca" ] && _ctxray_up "$p" cost-xray-codex.service; then
+    bypass="$(_ctxray_no_proxy)"
+    NO_PROXY="$bypass" no_proxy="$bypass" \
     HTTP_PROXY="http://127.0.0.1:$p" HTTPS_PROXY="http://127.0.0.1:$p" \
     CODEX_CA_CERTIFICATES="$ca" SSL_CERT_FILE="$ca" NODE_EXTRA_CA_CERTS="$ca" \
       _ctxray_codex_exec "$@"
