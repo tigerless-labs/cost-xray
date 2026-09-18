@@ -12,6 +12,21 @@ _OVERRIDES = {
 _DEFAULT = {"input": 5.0, "output": 25.0}
 
 
+def _cache_mults(model: str):
+    """Per-provider cache multipliers for entries that lack cache fields.
+
+    Anthropic: read 0.1x, write 1.25x (published). OpenAI: cached input is
+    50% off with no write surcharge (0.5x / 0x) — applying Anthropic's
+    multipliers there understates cache-read cost ~5x and invents a write
+    surcharge OpenAI never bills. Unrecognized families keep the Anthropic
+    shape as an explicit estimate rather than an invented per-vendor guess.
+    """
+    m = (model or "").lower()
+    if m.startswith(("gpt-", "o1", "o3", "o4", "chatgpt", "openai/")) or "/gpt-" in m:
+        return 0.5, 0.0
+    return CACHE_READ_MULT, CACHE_WRITE_MULT
+
+
 def _keys(model: str):
     return (model, model.split("[", 1)[0], model.split("/", 1)[-1])
 
@@ -24,7 +39,7 @@ def _safe_rate(x):
     return min(float(x), _MAX_PER_TOKEN)
 
 
-def _parse_litellm_entry(entry):
+def _parse_litellm_entry(entry, model: str = ""):
     if not isinstance(entry, dict):
         return None
     inp = _safe_rate(entry.get("input_cost_per_token"))
@@ -33,9 +48,10 @@ def _parse_litellm_entry(entry):
         return None
     cr = _safe_rate(entry.get("cache_read_input_token_cost"))
     cw = _safe_rate(entry.get("cache_creation_input_token_cost"))
+    rm, wm = _cache_mults(model)
     return {"input": inp * 1_000_000, "output": out * 1_000_000,
-            "cache_read": (cr if cr is not None else inp * CACHE_READ_MULT) * 1_000_000,
-            "cache_write": (cw if cw is not None else inp * CACHE_WRITE_MULT) * 1_000_000}
+            "cache_read": (cr if cr is not None else inp * rm) * 1_000_000,
+            "cache_write": (cw if cw is not None else inp * wm) * 1_000_000}
 
 
 def _litellm_rates(model: str):
@@ -43,7 +59,7 @@ def _litellm_rates(model: str):
         return None
     mc = pricing_map.load()
     for key in _keys(model):
-        out = _parse_litellm_entry(mc.get(key))
+        out = _parse_litellm_entry(mc.get(key), model)
         if out:
             return out
     return None
