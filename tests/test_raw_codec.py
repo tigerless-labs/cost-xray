@@ -1,6 +1,10 @@
 from __future__ import annotations
 
 import json
+import os
+import subprocess
+import sys
+from pathlib import Path
 
 from cost_xray import raw_codec as rc
 
@@ -202,3 +206,39 @@ def test_materialize_reads_deduped_same_as_legacy(tmp_path):
     assert sl["n_turns"] == sd["n_turns"] >= 1
     assert sl["bill"] == sd["bill"]
     assert sl.get("tokens") == sd.get("tokens")
+
+
+_ASCII_LOCALE_ROUNDTRIP = """
+import json, pathlib, sys
+from cost_xray import raw_codec as rc
+from cost_xray.materialize import materialize_session
+src, d = pathlib.Path(sys.argv[1]), pathlib.Path(sys.argv[2])
+recs = json.loads(src.read_bytes())
+for r in recs:
+    rc.append_record(d, r)
+back = list(rc.iter_records(d))
+assert [rc._dump(b) for b in back] == [rc._dump(r) for r in recs]
+assert rc._dump(rc.latest_record(d)) == rc._dump(recs[-1])
+first = materialize_session(d)
+second = materialize_session(d)
+assert first["n_turns"] == second["n_turns"] == len(recs)
+"""
+
+
+def test_non_ascii_round_trips_under_ascii_host_locale(tmp_path):
+    name = "\u5de5\u5177-\u00e9\u00e8-\U0001f600"
+    recs = [_anthropic_turn([_msg(i) for i in range(k)] + [
+        {"role": "user", "content": [{"type": "text", "text": name}]}]) for k in range(1, 4)]
+    for r in recs:
+        r["request"]["system"] = name
+        r["request"]["tools"] = [{"name": name}]
+    src = tmp_path / "recs.json"
+    src.write_bytes(json.dumps(recs).encode("ascii"))
+    d = tmp_path / "claude" / "s"
+    d.mkdir(parents=True)
+    env = dict(os.environ, LC_ALL="C", LANG="C", PYTHONCOERCECLOCALE="0", PYTHONUTF8="0",
+               PYTHONPATH=str(Path(__file__).resolve().parents[1]))
+    res = subprocess.run([sys.executable, "-c", _ASCII_LOCALE_ROUNDTRIP, str(src), str(d)],
+                         env=env, capture_output=True, text=True, encoding="utf-8")
+    assert res.returncode == 0, res.stderr
+    assert name in (d / "blocks.jsonl").read_text(encoding="utf-8")

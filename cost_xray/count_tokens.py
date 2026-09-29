@@ -356,7 +356,7 @@ _TOOL_STORE = pathlib.Path(os.path.expanduser("~/.cost-xray/tool_tokens.json"))
 
 def _tool_store_load():
     try:
-        return json.loads(_TOOL_STORE.read_text())
+        return json.loads(_TOOL_STORE.read_text(encoding="utf-8"))
     except Exception:
         return {}
 
@@ -365,7 +365,7 @@ def _tool_store_save(store):
     try:
         _TOOL_STORE.parent.mkdir(parents=True, exist_ok=True)
         tmp = _TOOL_STORE.with_name(_TOOL_STORE.name + ".tmp")
-        tmp.write_text(json.dumps(store))
+        tmp.write_text(json.dumps(store), encoding="utf-8")
         tmp.replace(_TOOL_STORE)
     except Exception:
         pass

@@ -18,7 +18,7 @@ def _derived_one(session_dir):
     if not p.exists():
         return []
     turns = []
-    for line in p.read_text().splitlines():
+    for line in p.read_text(encoding="utf-8").splitlines():
         line = line.strip()
         if line:
             try:
@@ -66,7 +66,7 @@ def _summary_one(session_dir):
     if not p.exists():
         return {}
     try:
-        return json.loads(p.read_text())
+        return json.loads(p.read_text(encoding="utf-8"))
     except Exception:
         return {}
 
