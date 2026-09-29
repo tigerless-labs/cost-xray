@@ -11,7 +11,7 @@ def main() -> None:
         m = json.loads(resp.read().decode())
     if not pricing_map._valid(m):
         raise SystemExit("fetched price map failed validation")
-    pricing_map._BUNDLED.write_text(json.dumps(m))
+    pricing_map._BUNDLED.write_text(json.dumps(m), encoding="utf-8")
     print(f"wrote {len(m)} models to {pricing_map._BUNDLED}")
 
 

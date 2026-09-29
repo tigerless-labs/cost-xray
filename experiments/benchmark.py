@@ -18,7 +18,7 @@ REPORTS = pathlib.Path(__file__).resolve().parent / "reports"
 def _read_jsonl(path):
     out = []
     try:
-        for line in pathlib.Path(path).read_text().splitlines():
+        for line in pathlib.Path(path).read_text(encoding="utf-8").splitlines():
             line = line.strip()
             if line:
                 try:
@@ -110,7 +110,7 @@ def main():
     REPORTS.mkdir(exist_ok=True)
     ts = time.strftime("%Y%m%d-%H%M%S")
     out = REPORTS / f"benchmark-{ts}.json"
-    out.write_text(json.dumps({"ts": ts, "runs": runs, "target_turns": args.limit}, indent=2, default=str))
+    out.write_text(json.dumps({"ts": ts, "runs": runs, "target_turns": args.limit}, indent=2, default=str), encoding="utf-8")
     print(f"structured report → {out}")
 
 
