@@ -123,7 +123,7 @@ def _update_meta(d: pathlib.Path, flow, body, ts: float) -> None:
 def _update_meta_info(d: pathlib.Path, info: dict) -> None:
     path = d / "meta.json"
     try:
-        meta = json.loads(path.read_text())
+        meta = json.loads(path.read_text(encoding="utf-8"))
     except Exception:
         meta = {}
     meta.setdefault("session_id", d.name)
@@ -137,7 +137,7 @@ def _update_meta_info(d: pathlib.Path, info: dict) -> None:
     meta["user_agent"] = info.get("user_agent", "")
     meta["host"] = info.get("host", "")
     try:
-        path.write_text(json.dumps(meta))
+        path.write_text(json.dumps(meta), encoding="utf-8")
     except Exception:
         pass
 
@@ -171,7 +171,7 @@ class _Materializer:
         repo = pathlib.Path(__file__).resolve().parent.parent
         env = dict(os.environ)
         env["PYTHONPATH"] = os.pathsep.join(p for p in (str(repo), env.get("PYTHONPATH", "")) if p)
-        log = (OUT / "materializer.log").open("a")
+        log = (OUT / "materializer.log").open("a", encoding="utf-8")
         return subprocess.Popen(
             [sys.executable, "-m", "cost_xray.materialize_daemon", "--watch"],
             stdin=subprocess.PIPE, stdout=log, stderr=log, cwd=str(repo), env=env)
@@ -219,7 +219,7 @@ def _writer_loop() -> None:
             kind = job[0]
             if kind == "append_raw":
                 _, d, rec = job
-                with (d / "raw.jsonl").open("a") as f:
+                with (d / "raw.jsonl").open("a", encoding="utf-8") as f:
                     f.write(json.dumps(rec, ensure_ascii=False) + "\n")
             elif kind == "meta":
                 _, d, meta = job
@@ -387,7 +387,7 @@ def websocket_end(flow) -> None:
             rec, obj = _ws_record(flow, m)
             if d is None:
                 d = _session_dir(flow, obj if isinstance(obj, dict) else None)
-            with (d / "raw.jsonl").open("a") as f:
+            with (d / "raw.jsonl").open("a", encoding="utf-8") as f:
                 f.write(json.dumps(rec, ensure_ascii=False) + "\n")
             if isinstance(obj, dict) and m.from_client and obj.get("type") == "response.create":
                 last_create = (obj, rec["ts"])

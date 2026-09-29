@@ -50,7 +50,7 @@ def _sessions() -> list[dict]:
             continue
         meta = {}
         try:
-            meta = json.loads((d / "meta.json").read_text())
+            meta = json.loads((d / "meta.json").read_text(encoding="utf-8"))
         except Exception:
             pass
         out.append({"dir": d, "sid": d.name, "agent": d.parent.name,
@@ -79,7 +79,7 @@ def _report_for(d: pathlib.Path) -> dict | None:
     leg = d / "latest.json"
     if leg.exists():
         try:
-            return json.loads(leg.read_text())
+            return json.loads(leg.read_text(encoding="utf-8"))
         except Exception:
             return None
     return None
@@ -136,7 +136,7 @@ def _rollup(agent_dir: pathlib.Path):
         if hit and hit[0] == mt:
             data = hit[1]
         elif rp.exists():
-            data = json.loads(rp.read_text())
+            data = json.loads(rp.read_text(encoding="utf-8"))
             _ROLLUP_CACHE[str(agent_dir)] = (mt, data)
     except Exception:
         data = None
@@ -162,7 +162,7 @@ def _summary(d: pathlib.Path):
     if hit and hit[0] == mt:
         return hit[1]
     try:
-        s = json.loads(sp.read_text())
+        s = json.loads(sp.read_text(encoding="utf-8"))
     except Exception:
         s = None
     _SUMMARY_CACHE[str(d)] = (mt, s)

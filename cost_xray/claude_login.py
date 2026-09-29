@@ -22,7 +22,7 @@ def _config_dir() -> pathlib.Path:
 
 def _blob_from_file():
     try:
-        d = json.loads((_config_dir() / CREDENTIALS_NAME).read_text())
+        d = json.loads((_config_dir() / CREDENTIALS_NAME).read_text(encoding="utf-8"))
         return d.get("claudeAiOauth") or None
     except Exception:
         return None

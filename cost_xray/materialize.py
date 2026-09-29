@@ -218,7 +218,7 @@ def _materialize_locked(d):
     def _flush(offset=None):
         nonlocal buf
         if buf:
-            with derived_path.open("a") as f:
+            with derived_path.open("a", encoding="utf-8") as f:
                 f.write("\n".join(buf) + "\n")
             buf = []
         summary["n_turns"] = turn

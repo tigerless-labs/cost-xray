@@ -39,7 +39,7 @@ def capture_broken_sessions(root=ROOT):
         if (d / "raw.jsonl").exists():
             continue
         try:
-            n_turns = json.loads(meta.read_text()).get("n_turns", 0)
+            n_turns = json.loads(meta.read_text(encoding="utf-8")).get("n_turns", 0)
         except Exception:
             continue
         if n_turns > 0:

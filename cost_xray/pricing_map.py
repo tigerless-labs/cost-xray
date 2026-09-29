@@ -25,14 +25,14 @@ def _valid(m) -> bool:
 
 
 def _bundled() -> dict:
-    return json.loads(_BUNDLED.read_text())
+    return json.loads(_BUNDLED.read_text(encoding="utf-8"))
 
 
 def _resolve() -> dict:
     f = _cache_file()
     try:
         if f.exists() and time.time() - f.stat().st_mtime < _TTL:
-            cached = json.loads(f.read_text())
+            cached = json.loads(f.read_text(encoding="utf-8"))
             if _valid(cached):
                 return cached
     except Exception:
@@ -41,7 +41,7 @@ def _resolve() -> dict:
         fetched = _fetch()
         if _valid(fetched):
             f.parent.mkdir(parents=True, exist_ok=True)
-            f.write_text(json.dumps(fetched))
+            f.write_text(json.dumps(fetched), encoding="utf-8")
             return fetched
     except Exception:
         pass
