@@ -376,18 +376,19 @@ def tools_exact(tools, model, key=None, oauth=None, _http=None, now=None):
         return None
     ck = f"{model}|" + hashlib.sha1(json.dumps(tools, ensure_ascii=False, sort_keys=True,
                                                default=str).encode()).hexdigest()
-    if ck in _TOOL_CACHE:
-        return _TOOL_CACHE[ck]
     t = time.time() if now is None else now
+    cached = _TOOL_CACHE.get(ck)
+    if cached is not None and 0 <= t - cached[0] < _TOOL_TTL:
+        return cached[1]
     store = _tool_store_load()
     ent = store.get(ck)
     if isinstance(ent, dict) and ent.get("vals") is not None and (t - ent.get("ts", 0)) < _TOOL_TTL:
-        _TOOL_CACHE[ck] = ent["vals"]
+        _TOOL_CACHE[ck] = (ent["ts"], ent["vals"])
         return ent["vals"]
     pe = per_event_tokens({"tools": tools, "messages": _STUB}, model, key, oauth, _http=_http)
     vals = [tok for lbl, tok in pe if lbl.startswith("tool:")] if pe else None
     out = vals if (vals is not None and len(vals) == len(tools)) else None
-    _TOOL_CACHE[ck] = out
+    _TOOL_CACHE[ck] = (t, out)
     if out is not None:
         store[ck] = {"vals": out, "ts": t}
         _tool_store_save(store)
