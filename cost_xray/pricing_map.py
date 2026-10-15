@@ -31,7 +31,7 @@ def _bundled() -> dict:
 def _resolve() -> dict:
     f = _cache_file()
     try:
-        if f.exists() and time.time() - f.stat().st_mtime < _TTL:
+        if f.exists() and 0 <= time.time() - f.stat().st_mtime < _TTL:
             cached = json.loads(f.read_text(encoding="utf-8"))
             if _valid(cached):
                 return cached
@@ -50,7 +50,7 @@ def _resolve() -> dict:
 
 def load() -> dict:
     now = time.time()
-    if _state["map"] is not None and now - _state["at"] < _TTL:
+    if _state["map"] is not None and 0 <= now - _state["at"] < _TTL:
         return _state["map"]
     resolved = _resolve()
     _state["map"] = resolved
