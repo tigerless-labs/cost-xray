@@ -8,7 +8,7 @@ from cost_xray.adapters import naming
 
 RESPONSES_PATH = "/backend-api/codex/responses"
 
-_CWD_RE = re.compile(r"(?:working directory:|<cwd>)\s*(/[^\s\"'<,\\]+)", re.I)
+_CWD_RE = re.compile(r"(?:working directory:|<cwd>)\s*(/[^\"'<,\\]+)", re.I)
 
 
 def project_name(records):
