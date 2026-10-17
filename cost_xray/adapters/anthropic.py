@@ -182,7 +182,7 @@ def _tool_use_index(messages):
         content = msg.get("content") if isinstance(msg, dict) else None
         if isinstance(content, list):
             for b in content:
-                if isinstance(b, dict) and b.get("type") == "tool_use" and b.get("id"):
+                if isinstance(b, dict) and ev.bucket_of(b.get("type")) == "tool_use" and b.get("id"):
                     idx[b["id"]] = b.get("name")
     return idx
 
@@ -212,9 +212,9 @@ def _block_events(block, *, ref, zone, section, role=None, id2tool=None):
     if bt == "text" and zone == "input" and section == "messages":
         return _text_slot(block.get("text") or "", ref, role, block)
     tool = skill = call_id = None
-    if bt == "tool_use":
+    if ev.bucket_of(bt) == "tool_use":
         tool, call_id = block.get("name"), block.get("id")
-    elif bt == "tool_result":
+    elif ev.bucket_of(bt) == "tool_result":
         call_id = block.get("tool_use_id")
         tool = (id2tool or {}).get(call_id)
     return [ev.make_event(zone=zone, section=section, wire_type=bt, ref=ref,
