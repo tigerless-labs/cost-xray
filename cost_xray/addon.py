@@ -238,16 +238,22 @@ def _drain_writes_for_tests() -> None:
 
 def _parse_sse(text: str) -> tuple[list, dict | None]:
     events, usage = [], {}
-    for line in text.splitlines():
-        line = line.strip()
-        if not line.startswith("data:"):
-            continue
-        payload = line[5:].strip()
+    chunks, data = [], []
+    for line in [*text.replace("\r\n", "\n").replace("\r", "\n").split("\n"), ""]:
+        if not line:
+            if data:
+                chunks.append("\n".join(data))
+                data = []
+        elif line.startswith("data:"):
+            data.append(line[5:].removeprefix(" "))
+    for payload in chunks:
         if not payload or payload == "[DONE]":
             continue
         try:
             obj = json.loads(payload)
         except Exception:
+            continue
+        if not isinstance(obj, dict):
             continue
         events.append(obj)
         u = obj.get("usage") or (obj.get("message") or {}).get("usage")
