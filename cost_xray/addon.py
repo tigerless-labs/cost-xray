@@ -171,10 +171,10 @@ class _Materializer:
         repo = pathlib.Path(__file__).resolve().parent.parent
         env = dict(os.environ)
         env["PYTHONPATH"] = os.pathsep.join(p for p in (str(repo), env.get("PYTHONPATH", "")) if p)
-        log = (OUT / "materializer.log").open("a", encoding="utf-8")
-        return subprocess.Popen(
-            [sys.executable, "-m", "cost_xray.materialize_daemon", "--watch"],
-            stdin=subprocess.PIPE, stdout=log, stderr=log, cwd=str(repo), env=env)
+        with (OUT / "materializer.log").open("a", encoding="utf-8") as log:
+            return subprocess.Popen(
+                [sys.executable, "-m", "cost_xray.materialize_daemon", "--watch"],
+                stdin=subprocess.PIPE, stdout=log, stderr=log, cwd=str(repo), env=env)
 
     def send(self, _=1) -> None:
         with _CONSUMER_LOCK:
