@@ -184,7 +184,9 @@ def _latest_derived(d: pathlib.Path):
             if not ln:
                 continue
             try:
-                return json.loads(ln)
+                value = json.loads(ln)
+                if isinstance(value, dict):
+                    return value
             except Exception:
                 continue
         return None
@@ -212,7 +214,9 @@ def _tail_records(p: pathlib.Path, max_bytes: int = _MAIN_TAIL_BYTES):
         if not ln:
             continue
         try:
-            out.append(json.loads(ln))
+            value = json.loads(ln)
+            if isinstance(value, dict):
+                out.append(value)
         except Exception:
             continue
     return out
