@@ -167,7 +167,8 @@ def input_thinking_tokens(messages, model, key=None, oauth=None, _http=None):
     except Exception:
         return None
     val = max(0, a - a_nt) if (a is not None and a_nt is not None) else None
-    _CACHE[h] = val
+    if val is not None:
+        _CACHE[h] = val
     return val
 
 
@@ -338,10 +339,8 @@ def exact_anchors(request, model, key=None, oauth=None, _http=None):
         no_think = _without_thinking(messages)
         a_nt = a if no_think == messages else _count(model, auth, messages=no_think, _http=_http)
     except Exception:
-        _CACHE[h] = None
         return None
     if a is None or b is None or c is None or a_nt is None:
-        _CACHE[h] = None
         return None
     out = {"system": max(0, b - a), "tools": max(0, c - b), "messages": a,
            "thinking": max(0, a - a_nt), "static": max(0, c - a), "total": c}
@@ -392,7 +391,8 @@ def tools_exact(tools, model, key=None, oauth=None, _http=None, now=None):
     pe = per_event_tokens({"tools": tools, "messages": _STUB}, model, key, oauth, _http=_http)
     vals = [tok for lbl, tok in pe if lbl.startswith("tool:")] if pe else None
     out = vals if (vals is not None and len(vals) == len(tools)) else None
-    _TOOL_CACHE[ck] = out
+    if out is not None:
+        _TOOL_CACHE[ck] = out
     if out is not None:
         store[ck] = {"vals": out, "ts": t}
         _tool_store_save(store)
