@@ -228,8 +228,8 @@ def _blocks_from_sse(sse_events):
         if et == "content_block_start":
             idx = e.get("index")
             cb = e.get("content_block") or {}
-            blocks[idx] = {"type": cb.get("type"), "name": cb.get("name"),
-                           "id": cb.get("id"), "_text": "", "_json": "",
+            blocks[idx] = {**cb, "type": cb.get("type"), "name": cb.get("name"),
+                           "id": cb.get("id"), "_text": cb.get("text") or cb.get("thinking") or "", "_json": "",
                            "_sig": cb.get("signature") or ""}
             order.append(idx)
         elif et == "content_block_delta":
@@ -248,7 +248,7 @@ def _blocks_from_sse(sse_events):
     out = []
     for idx in order:
         blk = blocks[idx]
-        rec = {"type": blk["type"]}
+        rec = {k: v for k, v in blk.items() if not k.startswith("_") and v is not None}
         if blk["name"]:
             rec["name"] = blk["name"]
         if blk["id"]:
@@ -261,7 +261,10 @@ def _blocks_from_sse(sse_events):
         elif blk["_text"]:
             rec["text"] = blk["_text"]
         if blk["_json"]:
-            rec["input"] = blk["_json"]
+            try:
+                rec["input"] = json.loads(blk["_json"])
+            except ValueError:
+                rec["input"] = blk["_json"]
         out.append(rec)
     return out
 
