@@ -40,8 +40,11 @@ def _resolve() -> dict:
     try:
         fetched = _fetch()
         if _valid(fetched):
-            f.parent.mkdir(parents=True, exist_ok=True)
-            f.write_text(json.dumps(fetched), encoding="utf-8")
+            try:
+                f.parent.mkdir(parents=True, exist_ok=True)
+                f.write_text(json.dumps(fetched), encoding="utf-8")
+            except OSError:
+                pass
             return fetched
     except Exception:
         pass
