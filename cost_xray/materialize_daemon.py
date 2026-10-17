@@ -8,7 +8,7 @@ import pathlib
 import select
 import sys
 
-from cost_xray.materialize import materialize_session, set_rollup_broken
+from cost_xray.materialize import materialize_session, needs_refresh, set_rollup_broken
 
 ROOT = pathlib.Path(os.path.expanduser("~/.cost-xray/sessions"))
 _LOG = logging.getLogger("cost_xray.materialize_daemon")
@@ -20,13 +20,7 @@ def stale_sessions(root=ROOT):
     out = []
     for raw in root.glob("*/*/raw.jsonl"):
         d = raw.parent
-        try:
-            raw_mt = raw.stat().st_mtime
-            sp = d / "summary.json"
-            sum_mt = sp.stat().st_mtime if sp.exists() else -1.0
-        except OSError:
-            continue
-        if raw_mt > sum_mt:
+        if needs_refresh(d):
             out.append(d)
     return out
 

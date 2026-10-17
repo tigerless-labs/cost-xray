@@ -151,6 +151,22 @@ def _load_state(d, agent):
     return _empty_summary(agent, d.name), 0, 0
 
 
+def needs_refresh(d):
+    d = pathlib.Path(d)
+    raw, summary = d / "raw.jsonl", d / "summary.json"
+    try:
+        raw_mt = raw.stat().st_mtime_ns
+    except OSError:
+        return False
+    try:
+        if raw_mt > summary.stat().st_mtime_ns:
+            return True
+        value = json.loads(summary.read_text(encoding="utf-8"))
+        return not isinstance(value, dict) or value.get("logic_version") != LOGIC_VERSION
+    except (OSError, ValueError):
+        return True
+
+
 def materialize_session(session_dir):
     d = pathlib.Path(session_dir)
     if not (d / "raw.jsonl").exists():
