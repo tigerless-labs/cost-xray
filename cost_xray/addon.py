@@ -180,8 +180,14 @@ class _Materializer:
         with _CONSUMER_LOCK:
             if self._proc is None or self._proc.poll() is not None:
                 self._proc = self._launch()
-            self._proc.stdin.write(b"\n")
-            self._proc.stdin.flush()
+            try:
+                self._proc.stdin.write(b"\n")
+                self._proc.stdin.flush()
+            except BrokenPipeError:
+                self._proc.stdin.close()
+                self._proc = self._launch()
+                self._proc.stdin.write(b"\n")
+                self._proc.stdin.flush()
 
 
 _MATERIALIZER = _Materializer()
