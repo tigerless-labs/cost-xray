@@ -273,7 +273,7 @@ def iter_turns(records):
 
 def window(record):
     headers = (record.get("request_headers") or {}) if isinstance(record, dict) else {}
-    betas = headers.get("anthropic-beta", "")
+    betas = next((v for k, v in headers.items() if k.lower() == "anthropic-beta"), "")
     if "context-1m" in betas or "[1m]" in _model(record).lower():
         return 1_000_000
     return 200_000
