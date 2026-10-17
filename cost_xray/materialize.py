@@ -79,6 +79,7 @@ def _derived_event(e):
         "cached": round(e["cached"]), "rewrote": round(e["rewrote"]),
         "fresh": round(e["fresh"]), "output": round(e["output"]),
         "usd": e["usd"],
+        **{k: e[k] for k in ("cached_usd", "rewrote_usd", "fresh_usd", "output_usd") if k in e},
         "ref": e.get("ref"), "id": e.get("id"), "type": e.get("type"), "hash": e.get("hash"),
     }
 
@@ -103,8 +104,10 @@ def _enrich_from_derived(line):
     for e in line.get("events", []):
         c, w, f, o = e.get("cached", 0), e.get("rewrote", 0), e.get("fresh", 0), e.get("output", 0)
         out.append({**e, "cal_tokens": e.get("tokens", 0),
-                    "cached_usd": c * r_cr, "rewrote_usd": w * r_cw,
-                    "fresh_usd": f * r_in, "output_usd": o * r_out})
+                    "cached_usd": e.get("cached_usd", c * r_cr),
+                    "rewrote_usd": e.get("rewrote_usd", w * r_cw),
+                    "fresh_usd": e.get("fresh_usd", f * r_in),
+                    "output_usd": e.get("output_usd", o * r_out)})
     return model, out
 
 
