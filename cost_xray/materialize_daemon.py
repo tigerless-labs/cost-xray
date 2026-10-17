@@ -42,7 +42,7 @@ def capture_broken_sessions(root=ROOT):
             n_turns = json.loads(meta.read_text(encoding="utf-8")).get("n_turns", 0)
         except Exception:
             continue
-        if n_turns > 0:
+        if type(n_turns) is int and n_turns > 0:
             out.append(d)
     return out
 

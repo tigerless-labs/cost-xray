@@ -126,12 +126,15 @@ def _update_meta_info(d: pathlib.Path, info: dict) -> None:
         meta = json.loads(path.read_text(encoding="utf-8"))
     except Exception:
         meta = {}
+    if not isinstance(meta, dict):
+        meta = {}
     meta.setdefault("session_id", d.name)
     meta.setdefault("agent", d.parent.name)
     ts = info.get("ts")
     meta.setdefault("first_seen", ts)
     meta["last_seen"] = ts
-    meta["n_turns"] = meta.get("n_turns", 0) + 1
+    n_turns = meta.get("n_turns", 0)
+    meta["n_turns"] = (n_turns if type(n_turns) is int and n_turns >= 0 else 0) + 1
     if info.get("model"):
         meta["model"] = info["model"]
     meta["user_agent"] = info.get("user_agent", "")
