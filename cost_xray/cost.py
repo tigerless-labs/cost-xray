@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+
 from cost_xray import pricing_map
 
 CACHE_READ_MULT = 0.1
@@ -57,7 +59,10 @@ def _parse_litellm_entry(entry, model: str = ""):
 def _litellm_rates(model: str):
     if not model:
         return None
-    mc = pricing_map.load()
+    try:
+        mc = pricing_map.load()
+    except (OSError, json.JSONDecodeError, UnicodeDecodeError):
+        return None
     for key in _keys(model):
         out = _parse_litellm_entry(mc.get(key), model)
         if out:
