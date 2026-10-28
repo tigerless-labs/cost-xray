@@ -8,7 +8,7 @@ from cost_xray import events as ev
 from cost_xray.adapters import naming
 
 _CWD_RE = re.compile(
-    r"invoked in the following environment:.{0,200}?[Pp]rimary working directory:\s*(/[^\s\"',\\]+)",
+    r"invoked in the following environment:.{0,200}?[Pp]rimary working directory:\s*(/[^\"',\\]+)",
     re.S)
 
 
