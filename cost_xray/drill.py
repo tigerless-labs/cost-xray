@@ -176,6 +176,6 @@ def _block_text(b):
             return c
         if isinstance(c, list):
             return "\n".join(_block_text(x) for x in c)
-        return (b.get("text") or b.get("thinking") or b.get("output")
-                or json.dumps(b, ensure_ascii=False))
+        value = b.get("text") or b.get("thinking") or b.get("output")
+        return _block_text(value) if value else json.dumps(b, ensure_ascii=False)
     return str(b)
