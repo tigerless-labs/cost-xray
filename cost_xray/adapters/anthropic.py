@@ -313,9 +313,8 @@ def locate(records, ref):
                 return None
         return content
     if "out" in ref:
-        body = (rec.get("response") or {}).get("body")
         try:
-            return (body.get("content") or [])[ref["out"]] if isinstance(body, dict) else None
+            return (_response_content(rec) or [])[ref["out"]]
         except Exception:
             return None
     if ref.get("field") == "system":
