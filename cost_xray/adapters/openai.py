@@ -222,7 +222,7 @@ def _content_text(content):
     if isinstance(content, str):
         return content
     if isinstance(content, dict):
-        return content.get("text", "")
+        return content.get("text") or content.get("refusal") or ""
     if isinstance(content, list):
         return "\n".join(c.get("text", "") if isinstance(c, dict) else str(c) for c in content)
     return ""
