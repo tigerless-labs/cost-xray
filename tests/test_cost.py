@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+
 import pytest
 
 from cost_xray import cost, pricing_map
@@ -110,3 +112,62 @@ def test_bundled_snapshot_loads_and_prices_opus(monkeypatch, tmp_path):
     assert r["input"] > 0 and r["output"] > r["input"]
     assert r["cache_read"] < r["input"]
     pricing_map.reset()
+
+
+@pytest.fixture
+def offline_pricing(monkeypatch, tmp_path):
+    bundled = tmp_path / "bundled.json"
+
+    def offline_fetch():
+        raise OSError("offline")
+
+    monkeypatch.setattr(pricing_map, "_cache_file", lambda: tmp_path / "cache.json")
+    monkeypatch.setattr(pricing_map, "_fetch", offline_fetch)
+    monkeypatch.setattr(pricing_map, "_BUNDLED", bundled)
+    pricing_map.reset()
+    try:
+        yield bundled
+    finally:
+        pricing_map.reset()
+
+
+@pytest.mark.parametrize("contents", [None, b"{", b"\xff"],
+                         ids=["missing", "invalid-json", "invalid-utf8"])
+@pytest.mark.parametrize(("model", "expected"), [
+    ("claude-fable-5", {"input": 10.0, "output": 50.0,
+                        "cache_read": 1.0, "cache_write": 12.5}),
+    ("unknown-model", {"input": 5.0, "output": 25.0,
+                       "cache_read": 0.5, "cache_write": 6.25}),
+], ids=["override", "default"])
+def test_price_read_failure_preserves_fallbacks(offline_pricing, contents, model, expected):
+    if contents is not None:
+        offline_pricing.write_bytes(contents)
+    assert rates(model) == pytest.approx(expected)
+    usage = {"input_tokens": 1000, "cache_read_input_tokens": 2000,
+             "cache_creation_input_tokens": 3000, "output_tokens": 4000}
+    expected_usd = {"fresh": expected["input"] * 1000 / 1_000_000,
+                    "cached": expected["cache_read"] * 2000 / 1_000_000,
+                    "rewrote": expected["cache_write"] * 3000 / 1_000_000,
+                    "output": expected["output"] * 4000 / 1_000_000}
+    result = turn_cost(usage, model)
+    assert result["usd"] == pytest.approx(expected_usd)
+    assert result["total_usd"] == pytest.approx(sum(expected_usd.values()))
+
+
+def test_loaded_prices_still_override_fallbacks(offline_pricing):
+    offline_pricing.write_text(json.dumps({
+        "claude-fable-5": {"input_cost_per_token": 2e-6, "output_cost_per_token": 8e-6},
+    }), encoding="utf-8")
+    assert rates("claude-fable-5") == pytest.approx({
+        "input": 2.0, "output": 8.0, "cache_read": 0.2, "cache_write": 2.5,
+    })
+
+
+@pytest.mark.parametrize("error_type", [TypeError, RuntimeError])
+def test_price_loader_programming_errors_propagate(offline_pricing, monkeypatch, error_type):
+    def broken_bundled():
+        raise error_type("unexpected loader failure")
+
+    monkeypatch.setattr(pricing_map, "_bundled", broken_bundled)
+    with pytest.raises(error_type, match="unexpected loader failure"):
+        rates("unknown-model")
