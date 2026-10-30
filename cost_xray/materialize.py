@@ -75,9 +75,9 @@ def _derived_event(e):
     return {
         "zone": e["zone"], "section": e["section"], "bucket": e["bucket"],
         "tool": e.get("tool"), "skill": e.get("skill"), "role": e.get("role"),
-        "tokens": round(e["cal_tokens"]),
-        "cached": round(e["cached"]), "rewrote": round(e["rewrote"]),
-        "fresh": round(e["fresh"]), "output": round(e["output"]),
+        "tokens": e["cal_tokens"],
+        "cached": e["cached"], "rewrote": e["rewrote"],
+        "fresh": e["fresh"], "output": e["output"],
         "usd": e["usd"],
         "ref": e.get("ref"), "id": e.get("id"), "type": e.get("type"), "hash": e.get("hash"),
     }
