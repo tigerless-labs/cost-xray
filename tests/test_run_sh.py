@@ -1,4 +1,5 @@
 import os
+import shlex
 import shutil
 import subprocess
 import tempfile
@@ -159,3 +160,29 @@ def test_linux_reinstall_restarts_running_service(tmp_path):
     r2, _, log = _linux_run(tmp_path, "install")
     assert r2.returncode == 0, r2.stderr
     assert "restart cost-xray.service" in log.read_text()
+
+
+def test_linux_units_keep_spaced_install_path_as_one_executable(tmp_path, monkeypatch):
+    """Both services must execute the complete path, rather than its first word."""
+    install_dir = tmp_path / "cost xray checkout"
+    install_dir.mkdir()
+    copied_run = install_dir / "run.sh"
+    shutil.copy2(RUN_SH, copied_run)
+    fake_mitm = install_dir / ".venv" / "bin"
+    fake_mitm.mkdir(parents=True)
+    _fake(fake_mitm, "mitmdump", "exit 0")
+    monkeypatch.setitem(globals(), "RUN_SH", copied_run)
+    # Avoid waiting for a real proxy to generate a CA: installation is mocked.
+    home = tmp_path / "home"
+    (home / ".mitmproxy").mkdir(parents=True)
+    (home / ".mitmproxy" / "mitmproxy-ca-cert.pem").write_text("test certificate")
+
+    result, home, _ = _linux_run(tmp_path, "install", agents="all")
+    assert result.returncode == 0, result.stderr
+    for service, entry in [("cost-xray.service", "_serve"),
+                           ("cost-xray-codex.service", "_serve_codex")]:
+        unit = home / ".config" / "systemd" / "user" / service
+        command = next(line.removeprefix("ExecStart=") for line in unit.read_text().splitlines()
+                       if line.startswith("ExecStart="))
+        # For these plain paths, systemd's quoted-word grammar has the same split.
+        assert shlex.split(command) == [str(copied_run), entry]
