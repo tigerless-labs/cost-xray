@@ -85,6 +85,11 @@ def _report_for(d: pathlib.Path) -> dict | None:
     return None
 
 
+def _file_stamp(path):
+    st = path.stat()
+    return (st.st_mtime_ns, st.st_size, st.st_ino)
+
+
 _SUMMARY_CACHE: dict = {}
 _MAT_THREADS: dict = {}
 _MAT_CAP = 2
@@ -131,7 +136,7 @@ def _rollup(agent_dir: pathlib.Path):
             if x.is_dir() and (x / "summary.json").exists()} if agent_dir.exists() else set()
     data = None
     try:
-        mt = rp.stat().st_mtime if rp.exists() else 0.0
+        mt = _file_stamp(rp) if rp.exists() else None
         hit = _ROLLUP_CACHE.get(str(agent_dir))
         if hit and hit[0] == mt:
             data = hit[1]
@@ -143,7 +148,7 @@ def _rollup(agent_dir: pathlib.Path):
     if not isinstance(data, dict) or set(data.get("sessions", {})) != have:
         try:
             data = rebuild_rollup(agent_dir)
-            _ROLLUP_CACHE[str(agent_dir)] = (rp.stat().st_mtime, data)
+            _ROLLUP_CACHE[str(agent_dir)] = (_file_stamp(rp), data)
         except Exception:
             data = data if isinstance(data, dict) else {"sessions": {}}
     return data
@@ -155,7 +160,7 @@ def _summary(d: pathlib.Path):
     if not sp.exists():
         return None
     try:
-        mt = sp.stat().st_mtime
+        mt = _file_stamp(sp)
     except OSError:
         return None
     hit = _SUMMARY_CACHE.get(str(d))
@@ -245,10 +250,11 @@ def _latest_main_derived(d, is_static):
         return None
     key = str(p)
     c = _MAIN_CACHE.get(key)
-    if c is not None and c[0] == st.st_mtime_ns and c[1] == st.st_size:
-        return c[2]
+    stamp = (st.st_mtime_ns, st.st_size, st.st_ino)
+    if c is not None and c[0] == stamp:
+        return c[1]
     line = _pick_main_line(_tail_records(p), is_static)
-    _MAIN_CACHE[key] = (st.st_mtime_ns, st.st_size, line)
+    _MAIN_CACHE[key] = (stamp, line)
     return line
 
 
