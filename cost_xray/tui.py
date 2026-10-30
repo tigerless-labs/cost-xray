@@ -9,7 +9,7 @@ from rich.text import Text
 
 from cost_xray import raw_codec
 from cost_xray.analyze import analyze
-from cost_xray.materialize import materialize_session
+from cost_xray.materialize import materialize_session, needs_refresh
 
 ROOT = pathlib.Path(os.path.expanduser("~/.cost-xray/sessions"))
 PIN = os.environ.get("COST_XRAY_SESSION")
@@ -99,15 +99,7 @@ def _safe_materialize(d: pathlib.Path) -> None:
 
 
 def _ensure_fresh(d: pathlib.Path) -> None:
-    raw, sp = d / "raw.jsonl", d / "summary.json"
-    if not raw.exists():
-        return
-    try:
-        raw_mt = raw.stat().st_mtime
-        sum_mt = sp.stat().st_mtime if sp.exists() else 0.0
-    except OSError:
-        return
-    if raw_mt <= sum_mt:
+    if not needs_refresh(d):
         return
     with _MAT_LOCK:
         t = _MAT_THREADS.get(str(d))
