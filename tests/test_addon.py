@@ -93,7 +93,50 @@ def test_session_id_from_codex_prompt_cache_key(make_flow):
 def test_session_id_falls_back_to_conn_id(make_flow):
     flow = make_flow(body={}, conn_id="0123456789abcdef")
     sid = addon._session_id(flow, {})
-    assert sid == "conn-01234567"
+    assert sid == "conn-0123456789abcdef"
+
+
+def test_fallback_keeps_connections_with_the_same_prefix_separate(make_flow):
+    first = make_flow(body={}, conn_id="01234567-aaaa-bbbb-cccc-000000000001")
+    second = make_flow(body={}, conn_id="01234567-aaaa-bbbb-cccc-000000000002")
+    assert addon._session_id(first, {}) != addon._session_id(second, {})
+
+
+def test_idless_flows_get_distinct_stable_session_ids(make_flow):
+    first = make_flow(body={}, conn_id=None)
+    second = make_flow(body={}, conn_id=None)
+    first_id = addon._session_id(first, {})
+    second_id = addon._session_id(second, {})
+    assert first_id != second_id
+    assert first_id != "unknown"
+    assert addon._session_id(first, {}) == first_id
+    assert addon._session_id(second, {}) == second_id
+
+
+def test_fallback_preserves_explicit_session_precedence(make_flow):
+    flow = make_flow(body={}, conn_id=None)
+    fallback = addon._session_id(flow, {})
+    assert addon._session_id(flow, {"prompt_cache_key": "real-session"}) == "real-session"
+    flow.request.headers["x-session-id"] = "header-session"
+    assert addon._session_id(flow, {}) == "header-session"
+    flow.request.headers.clear()
+    assert addon._session_id(flow, {}) == fallback
+
+
+def test_idless_http_flows_write_to_separate_stable_sessions(make_flow, isolated_sessions):
+    flows = [make_flow(body={"model": "claude-test"},
+                       req_headers={"user-agent": "claude-cli/1.0"},
+                       conn_id=None, resp_text='{"usage": {}}') for _ in range(2)]
+    for flow in flows:
+        addon.request(flow)
+        addon.response(flow)
+    addon._drain_writes_for_tests()
+
+    sessions = list((isolated_sessions / "claude").iterdir())
+    assert len(sessions) == 2
+    for session in sessions:
+        assert (session / "meta.json").exists()
+        assert len((session / "raw.jsonl").read_text().splitlines()) == 1
 
 
 def test_parse_sse_collects_events_and_merges_usage():
@@ -244,7 +287,7 @@ def test_websocket_message_appends_raw_realtime(make_flow, isolated_sessions):
     addon.websocket_message(flow)
     addon._drain_writes_for_tests()
 
-    d = isolated_sessions / "codex" / "conn-feedface"
+    d = isolated_sessions / "codex" / "conn-feedfacecafebeef"
     raw = d / "raw.jsonl"
     lines = raw.read_text().splitlines()
     assert len(lines) == 1

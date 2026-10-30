@@ -8,6 +8,7 @@ import queue
 import subprocess
 import sys
 import threading
+import uuid
 
 try:
     from cost_xray import raw_codec
@@ -95,7 +96,15 @@ def _session_id(flow, body) -> str:
             except Exception:
                 pass
     cid = getattr(getattr(flow, "client_conn", None), "id", None)
-    return f"conn-{str(cid)[:8]}" if cid else "unknown"
+    if cid:
+        return f"conn-{cid}"
+    # Missing connection metadata must not merge unrelated requests. Keep the
+    # generated fallback on the flow so response and WebSocket hooks reuse it.
+    metadata = _flow_meta(flow)
+    key = "cost_xray.fallback_session_id"
+    if key not in metadata:
+        metadata[key] = f"flow-{uuid.uuid4().hex}"
+    return metadata[key]
 
 
 def _session_dir(flow, body) -> pathlib.Path:
