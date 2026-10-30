@@ -48,7 +48,10 @@ def _resolve() -> dict:
             return fetched
     except Exception:
         pass
-    return _bundled()
+    try:
+        return _bundled()
+    except (OSError, json.JSONDecodeError, UnicodeDecodeError):
+        return {}
 
 
 def load() -> dict:

@@ -47,3 +47,18 @@ def test_fetch_failure_falls_back_to_bundle(monkeypatch, tmp_path):
         pricing_map, "_fetch", lambda: (_ for _ in ()).throw(OSError("network down")),
     )
     assert "claude-opus-4-8" in pricing_map.load()
+
+
+@pytest.mark.parametrize("contents", [None, b"{", b"\xff"],
+                         ids=["missing", "invalid-json", "invalid-utf8"])
+def test_fetch_and_bundle_failure_degrades_to_empty_map(monkeypatch, tmp_path, contents):
+    bundled = tmp_path / "litellm_prices.json"
+    if contents is not None:
+        bundled.write_bytes(contents)
+    monkeypatch.setattr(pricing_map, "_cache_file", lambda: tmp_path / "absent-cache.json")
+    monkeypatch.setattr(
+        pricing_map, "_fetch", lambda: (_ for _ in ()).throw(OSError("network down")),
+    )
+    monkeypatch.setattr(pricing_map, "_BUNDLED", bundled)
+
+    assert pricing_map.load() == {}
