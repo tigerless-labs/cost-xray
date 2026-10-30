@@ -153,9 +153,9 @@ def _item_units(item, base):
     if not isinstance(item, dict):
         return [(base, item)]
     t = item.get("type")
-    if t == "function_call":
+    if t in ("function_call", "custom_tool_call"):
         return [(base, item)]
-    if t == "function_call_output":
+    if t in ("function_call_output", "custom_tool_call_output"):
         return [(base, item.get("output"))]
     if t == "reasoning":
         return [(base, _reasoning_text(item))]
@@ -174,7 +174,7 @@ def _call_index(*item_lists):
     idx = {}
     for items in item_lists:
         for it in (items or []):
-            if isinstance(it, dict) and it.get("type") == "function_call" and it.get("call_id"):
+            if isinstance(it, dict) and it.get("type") in ("function_call", "custom_tool_call") and it.get("call_id"):
                 idx[it["call_id"]] = it.get("name")
     return idx
 
@@ -184,10 +184,10 @@ def _item_events(item, *, ref, zone, section, role=None, id2tool=None):
         return []
     t = item.get("type")
     r = role if role is not None else item.get("role")
-    if t == "function_call":
+    if t in ("function_call", "custom_tool_call"):
         return [ev.make_event(zone=zone, section=section, wire_type=t, ref=ref, content=item,
                               tool=item.get("name"), id=item.get("call_id"), role=r)]
-    if t == "function_call_output":
+    if t in ("function_call_output", "custom_tool_call_output"):
         cid = item.get("call_id")
         return [ev.make_event(zone=zone, section=section, wire_type=t, ref=ref,
                               content=item.get("output"), tool=(id2tool or {}).get(cid),
