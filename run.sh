@@ -126,7 +126,7 @@ Wants=network-online.target
 [Service]
 Type=simple
 EnvironmentFile=-$ENVFILE
-ExecStart=$SELF $(_k_entry "$1")
+ExecStart="$SELF" $(_k_entry "$1")
 Restart=always
 RestartSec=3
 
