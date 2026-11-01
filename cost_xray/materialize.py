@@ -158,14 +158,17 @@ def needs_refresh(d):
     d = pathlib.Path(d)
     raw, summary = d / "raw.jsonl", d / "summary.json"
     try:
-        raw_mt = raw.stat().st_mtime_ns
+        raw_stat = raw.stat()
+        raw_mt = raw_stat.st_mtime_ns
     except OSError:
         return False
     try:
         if raw_mt > summary.stat().st_mtime_ns:
             return True
         value = json.loads(summary.read_text(encoding="utf-8"))
-        return not isinstance(value, dict) or value.get("logic_version") != LOGIC_VERSION
+        return (not isinstance(value, dict)
+                or value.get("logic_version") != LOGIC_VERSION
+                or value.get("raw_offset") != raw_stat.st_size)
     except (OSError, ValueError):
         return True
 
@@ -203,12 +206,15 @@ def _materialize_locked(d):
             f.seek(raw_offset)
         data = f.read()
     nl = data.rfind(b"\n")
-    if nl < 0:
+    if nl < 0 and incremental:
         return summary
-    new_offset = (raw_offset if incremental else 0) + nl + 1
+    # A rebuilt capture may be empty or have no complete records yet. Persist
+    # the empty snapshot instead of leaving the invalidated summary on disk.
+    complete = data[:nl] if nl >= 0 else b""
+    new_offset = (raw_offset if incremental else 0) + max(nl + 1, 0)
     store = raw_codec.load_store(d)
     records = [raw_codec.decode(r, store)
-               for r in _parse_lines(data[:nl].decode("utf-8", "replace").splitlines())]
+               for r in _parse_lines(complete.decode("utf-8", "replace").splitlines())]
     if not incremental:
         summary, n_done = _empty_summary(agent, d.name), 0
 
