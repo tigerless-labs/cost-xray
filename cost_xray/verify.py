@@ -183,10 +183,10 @@ def bench_turn(record, model, adapter, *, anchors=None, per_tool=None, per_bucke
         ours_oe = [e for e in E if e["zone"] == "output"
                    and e["bucket"] in ("text", "thinking", "redacted_thinking")]
         ours_out_e, truth_out_e = {}, {}
-        for k, ((tbkt, ttok), e) in enumerate(zip(per_output_event, ours_oe, strict=False)):
-            key = ("out", k, tbkt)
-            ours_out_e[key] = e["cal_tokens"]
-            truth_out_e[key] = ttok
+        for k, e in enumerate(ours_oe):
+            ours_out_e[("out", k, e["bucket"])] = e["cal_tokens"]
+        for k, (tbkt, ttok) in enumerate(per_output_event):
+            truth_out_e[("out", k, tbkt)] = ttok
         facets["output_event"] = _facet(ours_out_e, truth_out_e)
 
     return {
