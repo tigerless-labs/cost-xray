@@ -7,10 +7,10 @@ import pathlib
 
 from cost_xray import adapters, count_tokens, raw_codec
 from cost_xray.adapters import anthropic as _anthropic
-from cost_xray.classify import _WRITE_1H_FACTOR, reconcile_turn, rollup
-from cost_xray.cost import rates
+from cost_xray.classify import reconcile_turn, rollup
+from cost_xray.cost import cache_write_rate, rates
 
-LOGIC_VERSION = 10
+LOGIC_VERSION = 11
 
 
 def _exact_pins(obj, evs, model, agent, path):
@@ -92,14 +92,16 @@ def _derived_line(turn, obj, model, win, usage, r):
     }
 
 
-MIN_REFOLD = 10
+# Earlier derived usage collapsed cache TTLs to a boolean; recover the counts
+# from raw captures rather than refolding that lossy representation.
+MIN_REFOLD = 11
 
 
 def _enrich_from_derived(line):
     model = line.get("model") or ""
     rt = rates(model)
     r_in, r_out, r_cr = rt["input"] / 1e6, rt["output"] / 1e6, rt["cache_read"] / 1e6
-    r_cw = (rt["cache_write"] / 1e6) * (_WRITE_1H_FACTOR if (line.get("usage") or {}).get("write_1h") else 1.0)
+    r_cw = cache_write_rate(line.get("usage") or {}, rt) / 1e6
     out = []
     for e in line.get("events", []):
         c, w, f, o = e.get("cached", 0), e.get("rewrote", 0), e.get("fresh", 0), e.get("output", 0)

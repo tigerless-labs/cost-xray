@@ -285,16 +285,16 @@ def window(record):
 def usage(record):
     u = (record.get("usage") if isinstance(record, dict) else None) or {}
     cc = u.get("cache_creation_input_tokens")
-    cc_1h = 0
+    obj = u.get("cache_creation")
+    cc_1h = _int(obj.get("ephemeral_1h_input_tokens")) if isinstance(obj, dict) else None
     if cc is None:
-        obj = u.get("cache_creation")
         if isinstance(obj, dict):
-            cc_1h = _int(obj.get("ephemeral_1h_input_tokens"))
             cc = cc_1h + _int(obj.get("ephemeral_5m_input_tokens"))
         else:
             cc = _int(obj)
     return ev.canon_usage(_int(u.get("input_tokens")), _int(u.get("cache_read_input_tokens")),
-                          _int(cc), _int(u.get("output_tokens")), write_1h=cc_1h > 0)
+                          _int(cc), _int(u.get("output_tokens")), write_1h=bool(cc_1h),
+                          rewrote_1h=cc_1h)
 
 
 def locate(records, ref):

@@ -110,10 +110,14 @@ def make_event(*, zone, section, ref, bucket=None, wire_type=None, content=None,
     }
 
 
-def canon_usage(fresh, cached, rewrote, output, write_1h=False, output_reasoning=0):
-    return {"fresh": int(fresh), "cached": int(cached), "rewrote": int(rewrote),
-            "output": int(output), "write_1h": bool(write_1h),
-            "output_reasoning": int(output_reasoning)}
+def canon_usage(fresh, cached, rewrote, output, write_1h=False, output_reasoning=0,
+                rewrote_1h=None):
+    out = {"fresh": int(fresh), "cached": int(cached), "rewrote": int(rewrote),
+           "output": int(output), "write_1h": bool(write_1h),
+           "output_reasoning": int(output_reasoning)}
+    if rewrote_1h is not None:
+        out["rewrote_1h"] = min(max(int(rewrote_1h), 0), max(int(rewrote), 0))
+    return out
 
 
 def unknown_types(events):

@@ -395,7 +395,7 @@ def test_window_reads_the_anthropic_beta_header_not_the_model_name():
 
 def test_anthropic_usage_canonical():
     u = anthropic.usage(_record())
-    assert u == {"fresh": 50, "cached": 1000, "rewrote": 200, "output": 10, "write_1h": True,
+    assert u == {"fresh": 50, "cached": 1000, "rewrote": 200, "output": 10, "write_1h": True, "rewrote_1h": 200,
                  "output_reasoning": 0}
 
 
