@@ -105,6 +105,22 @@ def _u(usage: dict, *keys) -> int:
     return 0
 
 
+def cache_write_rate(usage: dict, model_rates: dict) -> float:
+    """Blend the 5m write rate with its 1h subset; retain old boolean records.
+
+    One-hour writes cost 2x base input versus 1.25x for five-minute writes,
+    hence 1.6x the five-minute rate. Canonical counts are disjoint from reads
+    and fresh input; the subset cannot create more writes than their total.
+    """
+    hour = usage.get("rewrote_1h")
+    if isinstance(hour, (int, float)) and not isinstance(hour, bool):
+        total = usage.get("rewrote", 0)
+        fraction = min(max(hour, 0), total) / total if total > 0 else 0.0
+    else:
+        fraction = 1.0 if usage.get("write_1h") else 0.0
+    return model_rates["cache_write"] * (1 + 0.6 * fraction)
+
+
 def turn_cost(usage: dict, model: str) -> dict:
     r = rates(model)
     inp = r["input"] / 1_000_000
@@ -112,13 +128,19 @@ def turn_cost(usage: dict, model: str) -> dict:
 
     fresh = _u(usage, "input_tokens")
     cached = _u(usage, "cache_read_input_tokens")
-    rewrote = _u(usage, "cache_creation_input_tokens")
+    creation = usage.get("cache_creation")
+    breakdown = creation if isinstance(creation, dict) else {}
+    hour = _u(breakdown, "ephemeral_1h_input_tokens")
+    rewrote = (_u(usage, "cache_creation_input_tokens")
+               if isinstance(usage.get("cache_creation_input_tokens"), int)
+               else hour + _u(breakdown, "ephemeral_5m_input_tokens"))
     output = _u(usage, "output_tokens")
+    write_rate = cache_write_rate({"rewrote": rewrote, "rewrote_1h": hour}, r)
 
     usd = {
         "fresh": fresh * inp,
         "cached": cached * r["cache_read"] / 1_000_000,
-        "rewrote": rewrote * r["cache_write"] / 1_000_000,
+        "rewrote": rewrote * write_rate / 1_000_000,
         "output": output * out,
     }
     total_in = fresh + cached + rewrote

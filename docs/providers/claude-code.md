@@ -35,7 +35,7 @@ A raw record **is one turn** and the whole conversation is re-sent each turn, so
 - **type → bucket**: text → text; thinking / redacted → thinking; tool_use / server tool use →
   tool_use; tool_result / search results → tool_result. Unknown types pass through verbatim.
 - **usage**: fresh (uncached input), cached (cache-read), rewrote (cache-creation, incl. the nested
-  ephemeral split), output; plus a flag when the long-TTL 1-hour write bucket is non-zero.
+  ephemeral split), output; plus the numerical `rewrote_1h` subset and a legacy one-hour flag.
 - **window**: the extended-context signal is a **request header** (or a model tag) — not the model
   name, not max-tokens.
 - **thinking shape**: Claude streams thinking only as a **signature delta** (no readable text), so
@@ -89,3 +89,16 @@ write rate — and output. Cache rates are LiteLLM's own per-model values.
    (`reconcile_turn`) and the conservation laws in `tests/test_reconcile.py`.
 4. **Thinking over/under-counted?** `THINKING_R` and the exact pins ([../architecture.md](../architecture.md)).
 5. Add a **real captured fixture**; don't mock the wire.
+
+### Cache-write TTL accounting
+
+The usage adapter retains `rewrote` as total cache-write tokens and `rewrote_1h`
+as its one-hour subset when the API provides a `cache_creation` breakdown, even
+when the top-level total is also present. Five-minute and one-hour writes are
+priced separately (1.25x and 2x base input, respectively), per the
+[Anthropic prompt-caching contract](https://platform.claude.com/docs/en/build-with-claude/prompt-caching).
+The per-event write allocation uses the blended rate; the split between sibling
+events remains an estimate. Legacy derived records carrying only `write_1h`
+retain their old all-five-minute/all-one-hour interpretation when refolded.
+Logic version 11 rebuilds older session summaries from raw captures to recover
+the numerical breakdown instead of treating a historical boolean as sufficient.

@@ -1,10 +1,7 @@
 from __future__ import annotations
 
 from cost_xray import events as ev
-from cost_xray.cost import rates
-
-_WRITE_1H_FACTOR = 1.6
-
+from cost_xray.cost import cache_write_rate, rates
 
 _EMPTY_USAGE = {"fresh": 0, "cached": 0, "rewrote": 0, "output": 0, "write_1h": False}
 
@@ -77,7 +74,7 @@ def reconcile_turn(events, usage, model, anchors=None, thinking_r=1.0, output_an
     r = rates(model)
     r_in, r_out = r["input"] / 1_000_000, r["output"] / 1_000_000
     r_cr = r["cache_read"] / 1_000_000
-    r_cw = (r["cache_write"] / 1_000_000) * (_WRITE_1H_FACTOR if u["write_1h"] else 1.0)
+    r_cw = cache_write_rate(u, r) / 1_000_000
 
     enriched = []
     for e, cal, (c, w, f) in zip(inp, cal_in, cut, strict=True):
