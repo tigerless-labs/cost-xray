@@ -183,7 +183,12 @@ def iter_records(d: pathlib.Path):
                 rec = json.loads(line)
             except Exception:
                 continue
-            yield decode(rec, store)
+            try:
+                decoded = decode(rec, store)
+            except (KeyError, TypeError, ValueError):
+                continue
+            if isinstance(decoded, dict):
+                yield decoded
 
 
 def latest_record(d: pathlib.Path):
@@ -202,5 +207,13 @@ def latest_record(d: pathlib.Path):
     try:
         rec = json.loads(last)
     except Exception:
-        return None
-    return decode(rec, load_store(d) if _is_delta(rec) else {})
+        rec = None
+    try:
+        if isinstance(rec, dict):
+            return decode(rec, load_store(d) if _is_delta(rec) else {})
+    except (KeyError, TypeError, ValueError):
+        pass
+    last_valid = None
+    for decoded in iter_records(d):
+        last_valid = decoded
+    return last_valid
