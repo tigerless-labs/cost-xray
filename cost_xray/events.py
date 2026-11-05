@@ -17,6 +17,7 @@ BUCKET_OF = {
     "message": "text",
     "input_text": "text",
     "output_text": "text",
+    "refusal": "text",
     "function_call": "tool_use",
     "function_call_output": "tool_result",
     "custom_tool_call": "tool_use",
