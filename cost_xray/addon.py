@@ -189,8 +189,20 @@ class _Materializer:
         with _CONSUMER_LOCK:
             if self._proc is None or self._proc.poll() is not None:
                 self._proc = self._launch()
-            self._proc.stdin.write(b"\n")
-            self._proc.stdin.flush()
+            try:
+                self._proc.stdin.write(b"\n")
+                self._proc.stdin.flush()
+            except BrokenPipeError:
+                failed = self._proc
+                self._proc = None
+                try:
+                    failed.stdin.close()
+                except BrokenPipeError:
+                    # Closing a buffered pipe can retry the failed flush.
+                    pass
+                self._proc = self._launch()
+                self._proc.stdin.write(b"\n")
+                self._proc.stdin.flush()
 
 
 _MATERIALIZER = _Materializer()
