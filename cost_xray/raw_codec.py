@@ -116,39 +116,26 @@ def decode(record, store):
     return out
 
 
-def load_store(d: pathlib.Path) -> dict:
+def _block_entries(d):
     p = pathlib.Path(d) / BLOCKS
-    store: dict = {}
     if not p.exists():
-        return store
+        return
     with p.open(encoding="utf-8") as f:
         for line in f:
-            line = line.strip()
-            if not line:
-                continue
             try:
-                h, block = json.loads(line)
-            except Exception:
+                entry = json.loads(line)
+            except ValueError:
                 continue
-            store[h] = block
-    return store
+            if isinstance(entry, list) and len(entry) == 2 and isinstance(entry[0], str):
+                yield entry
+
+
+def load_store(d: pathlib.Path) -> dict:
+    return dict(_block_entries(d))
 
 
 def load_hashes(d: pathlib.Path) -> set:
-    p = pathlib.Path(d) / BLOCKS
-    out: set = set()
-    if not p.exists():
-        return out
-    with p.open(encoding="utf-8") as f:
-        for line in f:
-            line = line.strip()
-            if not line:
-                continue
-            try:
-                out.add(json.loads(line)[0])
-            except Exception:
-                continue
-    return out
+    return {h for h, _ in _block_entries(d)}
 
 
 def append_record(d: pathlib.Path, record, *, store=None, seen=None, ctx=None) -> None:
