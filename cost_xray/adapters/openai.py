@@ -68,7 +68,9 @@ def iter_turns(frames):
         elif ftype == "response.completed":
             resp = frame.get("response") or {}
             cur["usage"] = resp.get("usage")
-            if not cur["output"] and isinstance(resp.get("output"), list):
+            if resp.get("model"):
+                cur["model"] = resp["model"]
+            if isinstance(resp.get("output"), list):
                 cur["output"] = resp["output"]
             turns.append(cur)
             if _has_compaction(cur["new_input"]):
