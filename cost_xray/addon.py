@@ -184,7 +184,13 @@ class _Materializer:
                 self._proc.stdin.write(b"\n")
                 self._proc.stdin.flush()
             except BrokenPipeError:
-                self._proc.stdin.close()
+                failed = self._proc
+                self._proc = None
+                try:
+                    failed.stdin.close()
+                except BrokenPipeError:
+                    # Closing a buffered pipe can retry the failed flush.
+                    pass
                 self._proc = self._launch()
                 self._proc.stdin.write(b"\n")
                 self._proc.stdin.flush()
