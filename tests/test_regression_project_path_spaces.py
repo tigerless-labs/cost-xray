@@ -1,8 +1,12 @@
+import pytest
+
 from cost_xray.adapters import anthropic, openai
 
 
-def test_project_paths_with_spaces_remain_complete():
-    path = "/tmp/My Project"
+@pytest.mark.parametrize(
+    "path", ["/tmp/My Project", "/tmp/Project, OReilly", "/tmp/O'Reilly"]
+)
+def test_project_paths_with_spaces_and_punctuation_remain_complete(path):
     claude = {
         "request": {
             "system": "invoked in the following environment: Primary working directory: "
