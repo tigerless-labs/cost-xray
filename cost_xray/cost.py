@@ -100,8 +100,8 @@ def is_completion(rec: dict) -> bool:
 def _u(usage: dict, *keys) -> int:
     for k in keys:
         v = usage.get(k)
-        if isinstance(v, int):
-            return v
+        if isinstance(v, (int, float)):
+            return int(v)
     return 0
 
 
@@ -132,7 +132,7 @@ def turn_cost(usage: dict, model: str) -> dict:
     breakdown = creation if isinstance(creation, dict) else {}
     hour = _u(breakdown, "ephemeral_1h_input_tokens")
     rewrote = (_u(usage, "cache_creation_input_tokens")
-               if isinstance(usage.get("cache_creation_input_tokens"), int)
+               if isinstance(usage.get("cache_creation_input_tokens"), (int, float))
                else hour + _u(breakdown, "ephemeral_5m_input_tokens"))
     output = _u(usage, "output_tokens")
     write_rate = cache_write_rate({"rewrote": rewrote, "rewrote_1h": hour}, r)
