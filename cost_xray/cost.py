@@ -10,6 +10,14 @@ _MAX_PER_TOKEN = 1.0
 
 _OVERRIDES = {
     "claude-fable-5": {"input": 10.0, "output": 50.0},
+    # Claude 3.5 direct-API names no longer exist in litellm's map (only the
+    # bedrock/vertex aliases remain), so they fell back to _DEFAULT and
+    # silently overstated costs. Pin the published per-million prices.
+    "claude-3-5-haiku-20241022": {"input": 0.8, "output": 4.0},
+    "claude-3-5-haiku": {"input": 0.8, "output": 4.0},
+    "claude-3-5-haiku-latest": {"input": 0.8, "output": 4.0},
+    "claude-3-5-sonnet-20241022": {"input": 3.0, "output": 15.0},
+    "claude-3-5-sonnet": {"input": 3.0, "output": 15.0},
 }
 _DEFAULT = {"input": 5.0, "output": 25.0}
 
