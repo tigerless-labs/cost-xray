@@ -16,6 +16,7 @@ _OVERRIDES = {
     "claude-3-5-haiku-20241022": {"input": 0.8, "output": 4.0},
     "claude-3-5-haiku": {"input": 0.8, "output": 4.0},
     "claude-3-5-haiku-latest": {"input": 0.8, "output": 4.0},
+    "claude-3-5-sonnet-20240620": {"input": 3.0, "output": 15.0},
     "claude-3-5-sonnet-20241022": {"input": 3.0, "output": 15.0},
     "claude-3-5-sonnet": {"input": 3.0, "output": 15.0},
 }

@@ -23,6 +23,7 @@ def _use_bundled_map(monkeypatch):
     bundled = _bundled_map()
     # the premise of this fix: the shipped map has no direct-API Claude 3.5 keys
     assert "claude-3-5-haiku-20241022" not in bundled
+    assert "claude-3-5-sonnet-20240620" not in bundled
     assert "claude-3-5-sonnet-20241022" not in bundled
     monkeypatch.setattr(pricing_map, "load", lambda: bundled)
 
@@ -31,6 +32,7 @@ def _use_bundled_map(monkeypatch):
     ("claude-3-5-haiku-20241022", 0.8, 4.0),
     ("claude-3-5-haiku", 0.8, 4.0),
     ("claude-3-5-haiku-latest", 0.8, 4.0),
+    ("claude-3-5-sonnet-20240620", 3.0, 15.0),
     ("claude-3-5-sonnet-20241022", 3.0, 15.0),
     ("claude-3-5-sonnet", 3.0, 15.0),
 ])
