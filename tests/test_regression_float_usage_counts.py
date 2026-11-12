@@ -4,6 +4,8 @@ Relays/proxies (LiteLLM-style gateways, Go/Rust re-serializers) emit every JSON
 number as a float, and cost._u() only accepted ints — those sessions reported
 $0.00 silently. The adapters already cast (_int) the same way.
 """
+import pytest
+
 from cost_xray.cost import session_cost, turn_cost
 
 
@@ -30,3 +32,26 @@ def test_session_cost_accepts_float_usage_counts():
     s = session_cost(recs)
     assert s["total_usd"] > 0
     assert s["tokens"]["fresh"] == 1000
+
+
+@pytest.mark.parametrize(
+    "invalid",
+    [True, -1, -1.0, 1.5, float("nan"), float("inf"), float("-inf")],
+)
+def test_invalid_numeric_usage_counts_are_not_priced(invalid):
+    result = turn_cost({"input_tokens": invalid}, "claude-sonnet-4-5")
+
+    assert result["tokens"]["fresh"] == 0
+    assert result["usd"]["fresh"] == 0
+
+
+def test_invalid_direct_cache_count_falls_back_to_the_valid_breakdown():
+    usage = {
+        "cache_creation_input_tokens": float("nan"),
+        "cache_creation": {
+            "ephemeral_1h_input_tokens": 3.0,
+            "ephemeral_5m_input_tokens": 7.0,
+        },
+    }
+
+    assert turn_cost(usage, "claude-sonnet-4-5")["tokens"]["rewrote"] == 10

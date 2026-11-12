@@ -97,11 +97,21 @@ def is_completion(rec: dict) -> bool:
     return bool(rec.get("usage"))
 
 
+def _count(value) -> int | None:
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    if isinstance(value, float) and (value != value or value in (float("inf"), float("-inf"))):
+        return None
+    if value < 0 or int(value) != value:
+        return None
+    return int(value)
+
+
 def _u(usage: dict, *keys) -> int:
     for k in keys:
-        v = usage.get(k)
-        if isinstance(v, (int, float)):
-            return int(v)
+        value = _count(usage.get(k))
+        if value is not None:
+            return value
     return 0
 
 
@@ -131,9 +141,12 @@ def turn_cost(usage: dict, model: str) -> dict:
     creation = usage.get("cache_creation")
     breakdown = creation if isinstance(creation, dict) else {}
     hour = _u(breakdown, "ephemeral_1h_input_tokens")
-    rewrote = (_u(usage, "cache_creation_input_tokens")
-               if isinstance(usage.get("cache_creation_input_tokens"), (int, float))
-               else hour + _u(breakdown, "ephemeral_5m_input_tokens"))
+    direct_creation = _count(usage.get("cache_creation_input_tokens"))
+    rewrote = (
+        direct_creation
+        if direct_creation is not None
+        else hour + _u(breakdown, "ephemeral_5m_input_tokens")
+    )
     output = _u(usage, "output_tokens")
     write_rate = cache_write_rate({"rewrote": rewrote, "rewrote_1h": hour}, r)
 
